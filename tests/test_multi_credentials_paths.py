@@ -48,3 +48,32 @@ def test_vault_keys_are_independent(monkeypatch):
     CredentialStore.set_for_server("airwave-02","second")
     assert CredentialStore.get_for_server("airwave-01")=="first"
     assert CredentialStore.get_for_server("airwave-02")=="second"
+
+
+def test_concurrent_first_export_root_creation_does_not_reject_valid_server(
+    tmp_path, monkeypatch,
+):
+    """Windows에서는 미존재 경로가 생성되는 동안 resolve() 정규화가 달라질 수 있습니다.
+
+    실제 symlink가 없는 정상 경로는 동시 폴더 생성 때문에 차단하면 안 됩니다.
+    """
+    from pathlib import Path
+
+    root = tmp_path / "concurrent-exports"
+    cfg = MultiConfig(export_root=str(root))
+    server = add_server(
+        cfg, name="AW", url="https://safe.example.invalid", username="operator"
+    )
+    original_resolve = Path.resolve
+
+    def changing_path_resolution(self, *args, **kwargs):
+        # The directory becomes visible to another process between the two
+        # resolution calls; this imitates Windows canonicalization instability.
+        if self == root / server.id and not root.exists():
+            root.mkdir(parents=True, exist_ok=True)
+            return tmp_path / "different-canonical-name" / server.id
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", changing_path_resolution)
+    assert server_export_dir(cfg, server.id) == root / server.id
+    assert root.is_dir()
