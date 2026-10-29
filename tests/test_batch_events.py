@@ -23,3 +23,20 @@ def test_log_records_no_sensitive_fields(tmp_path):
     content=p.read_text(encoding="utf-8")
     assert '"server_id": "airwave-01"' in content
     assert "password" not in content
+
+
+
+def test_crashed_batch_reports_interrupted_in_main_status(tmp_path):
+    from airwave_csv.events import (
+        mark_batch_active, reconcile_interrupted_batch, write_batch_progress,
+    )
+    mark_batch_active(tmp_path, "crash-run")
+    write_batch_progress(tmp_path, "crash-run", {
+        "airwave-01": "SUCCESS", "airwave-02": "RUNNING", "airwave-03": "QUEUED"
+    })
+    reconcile_interrupted_batch(tmp_path)
+    result=read_last_batch(tmp_path)
+    assert result["run_id"]=="crash-run"
+    assert result["servers"]["airwave-01"]["status"]=="SUCCESS"
+    assert result["servers"]["airwave-02"]["status"]=="INTERRUPTED"
+    assert result["servers"]["airwave-03"]["status"]=="INTERRUPTED"
