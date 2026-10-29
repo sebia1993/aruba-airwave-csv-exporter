@@ -69,6 +69,21 @@
 - Produces: `normalize_server_url(url: str) -> str`, `add_server(settings: MultiConfig, *, name: str, url: str, username: str) -> ServerProfile`, `validate_settings(settings: MultiConfig) -> None`, `validate_server_profile(profile: ServerProfile) -> None`, `load_v2(path: Path) -> MultiConfig`, `save_v2(settings: MultiConfig, path: Path) -> None`
 
 - [ ] **Step 1: Write failing tests.** `test_first_run_allows_zero_servers`, `test_five_allowed_sixth_rejected`, `test_normalized_duplicate_url_rejected`, `test_deleted_id_never_reused`, `test_parallel_default_is_three`, `test_invalid_url_or_time_rejected`, `test_one_bad_server_does_not_invalidate_other_profiles`. Assert new install has 0 registered, first ID airwave-01, fifth succeeds, sixth raises ValueError, delete then add gets a higher ID, mixed-case host/443/trailing slash are duplicate. An existing server with valid stable ID but invalid URL/username is loadable as a failed server while the other valid server profiles remain runnable.
+    **대표 검증 테스트:**
+
+```python
+def test_five_allowed_sixth_rejected():
+    settings = MultiConfig()
+    for i in range(1, 6):
+        add_server(settings, name=f"AW{i}", url=f"https://aw{i}.example.invalid",
+                   username="operator")
+    assert len(settings.servers) == 5
+    assert settings.parallel_limit == 3
+    with pytest.raises(ValueError):
+        add_server(settings, name="AW6", url="https://aw6.example.invalid",
+                   username="operator")
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_multi_config.py` → import or assertion failure expected.
 - [ ] **Step 3: Implement minimal model and JSON atomic save.** Keep existing `config.Config` as legacy/single-attempt adapter; do not change `portal.py` behavior. Persist `next_server_number`; reject URL credentials, query and fragment **on add/edit**. Keep global structural validation (JSON schema, duplicate IDs/URLs, limits, non-dict entries) separate from **per-server readiness validation** (bad URL/account/CSS should fail only that server at dispatch time); syntactically unreadable JSON fails the batch.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_multi_config.py tests/test_config.py` → PASS.
@@ -86,6 +101,19 @@
 - Produces: `migrate_if_needed(home: Path, vault: CredentialStore) -> MultiConfig`; `CredentialStore.set_for_server(server_id: str, password: str) -> None`; `get_for_server(server_id: str) -> str`; legacy `get(server,user)`/`set(server,user,password)` unchanged.
 
 - [ ] **Step 1: Write failing tests.** `test_migrates_v1_once_and_preserves_original_csv`, `test_bad_v1_or_failed_write_rolls_back`, `test_missing_vault_password_requires_reentry_not_failure`, `test_migration_is_idempotent`. Assert backup of old config, selectors copied to per-server path, unchanged old CSV/latest.csv, no credential value in v2 JSON, duplicate startup yields one server.
+    **대표 검증 테스트:**
+
+```python
+def test_migration_is_idempotent(tmp_path, fake_vault):
+    Config(server_url="https://aw.example.invalid", username="ops",
+           export_dir=str(tmp_path / "csv")).save(tmp_path / "config.json")
+    first = migrate_if_needed(tmp_path, fake_vault)
+    second = migrate_if_needed(tmp_path, fake_vault)
+    assert [s.id for s in first.servers] == ["airwave-01"]
+    assert [s.id for s in second.servers] == ["airwave-01"]
+    assert (tmp_path / "config.v1.backup.json").exists()
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_migration.py` → FAIL.
 - [ ] **Step 3: Implement migration.** Read legacy config, back it up before changing; create airwave-01; copy (not move) selectors; only migrate credentials if legacy vault access succeeds; write v2 via temporary file+replace. If credentials absent, mark setup needed without guessing. Keep old files intact, and do not treat unverified CSS as verified.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_migration.py tests/test_config.py` → PASS.
@@ -104,6 +132,16 @@
 - Reuses: `store_export(staged, destination, expected_rows, drop_warning_percent) -> SavedExport`.
 
 - [ ] **Step 1: Write failing tests.** `test_alias_path_characters_cannot_escape_export_root`, `test_two_servers_have_independent_latest_and_drop_baseline`, `test_same_filename_never_cross_overwrites`, `test_vault_server_ids_are_isolated`. Assert server display aliases containing `../` have no effect on path, A 감소 경고 does not change B latest, A/B credentials never interchange.
+    **대표 검증 테스트:**
+
+```python
+def test_alias_does_not_change_server_path(tmp_path):
+    settings = MultiConfig(export_root=str(tmp_path / "exports"))
+    server = add_server(settings, name="../other-server",
+                        url="https://aw1.example.invalid", username="ops")
+    assert server_export_dir(settings, server.id) == tmp_path / "exports" / "airwave-01"
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_multi_credentials_paths.py` → FAIL.
 - [ ] **Step 3: Implement ID-based paths and vault key validation.** Resolve paths beneath `export_root` using immutable ID only; no automatic deletion/move of historical CSV. First new success establishes new per-server latest baseline; legacy root latest stays untouched.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_multi_credentials_paths.py tests/test_csv_store.py` → PASS.
@@ -121,6 +159,16 @@
 - Retry classification: `PortalError` 47/48 and `CsvValidationError` → retryable; `PortalError` 31/45/46 and profile/vault errors → not retryable.
 
 - [ ] **Step 1: Write failing tests.** `test_attempt_does_not_acquire_global_lock_or_sleep`, `test_retryable_timeout_47`, `test_nonretryable_wrong_view_45`, `test_legacy_run_once_still_retries_once`. Use fake Portal; assert no password appears in error/log and two different server destinations do not share latest.
+    **대표 검증 테스트:**
+
+```python
+def test_nonretryable_wrong_view_45(config_for, profile_for, tmp_path):
+    result = collect_attempt(config_for, profile_for, "dummy",
+                             portal_factory=WrongViewPortal, home=tmp_path)
+    assert result.exit_code == 45
+    assert result.retryable is False
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_single_attempt.py` → FAIL.
 - [ ] **Step 3: Extract one-attempt function.** Preserve existing CSV validation and fail-closed default view/Top/15~30s behavior; no Selenium bypass, TLS disable, or manual retry within worker.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_single_attempt.py tests/test_engine.py tests/test_portal.py` → PASS.
@@ -139,6 +187,17 @@
 - Consumes: `collect_attempt` from Task 4, `server_export_dir` Task 3, `CredentialStore.get_for_server` Task 2. Worker **must not take parent global lock**.
 
 - [ ] **Step 1: Write failing tests.** `test_snapshot_has_no_password_or_cookie`, `test_worker_one_attempt_reports_atomic_result`, `test_bad_css_fails_only_selected_server`, `test_snapshot_prevents_inflight_config_change`. Assert missing selectors or credential yields per-server failure not whole-batch startup crash.
+    **대표 검증 테스트:**
+
+```python
+def test_snapshot_has_no_password_or_cookie(tmp_path, batch_snapshot):
+    snapshot_path = write_snapshot(tmp_path, batch_snapshot)
+    text = snapshot_path.read_text(encoding="utf-8")
+    assert "my-secret-password" not in text
+    assert "session-cookie" not in text
+    assert read_snapshot(snapshot_path).run_id == batch_snapshot.run_id
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_worker.py` → FAIL.
 - [ ] **Step 3: Implement JSON snapshot + one-attempt worker.** Parent snapshots validated server fields/selectors at batch start; worker gets only `--snapshot`/`--server-id`/`--attempt`/`--result` paths/IDs, reads current user's vault itself; no password in args/env/JSON. Write result to temporary file+replace; close Playwright in finally.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_worker.py` → PASS.
@@ -155,6 +214,17 @@
 - Uses Windows `CreateProcessW(CREATE_SUSPENDED)` via ctypes, `AssignProcessToJobObject`, `ResumeThread` and `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` to terminate worker plus Edge descendants without a pre-assignment race. Use `subprocess.list2cmdline(argv)` for safe argument quoting, not `shell=True`. On non-Windows, use a testable `subprocess.Popen(shell=False)` adapter. Source-run Python uses `python -m airwave_csv ...`; frozen EXE uses `sys.executable` with the internal CLI worker command.
 
 - [ ] **Step 1: Write failing tests.** `test_worker_argv_contains_no_secret`, `test_timeout_terminates_worker_and_children_on_windows`, `test_missing_result_never_reports_success`. In Windows job, spawn synthetic worker that launches sleeping child and assert both are gone after terminate; Linux test uses fake process handle.
+    **대표 검증 테스트:**
+
+```python
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object")
+def test_timeout_terminates_worker_and_children(running_worker_with_child):
+    handle, worker_pid, edge_child_pid = running_worker_with_child
+    handle.terminate()
+    assert not process_exists(worker_pid)
+    assert not process_exists(edge_child_pid)
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_process_control.py` → FAIL.
 - [ ] **Step 3: Implement launcher/job object lifecycle.** Windows `ctypes` CreateProcessW returns handles for the suspended main thread and process; assign Job Object before ResumeThread, close thread handle after resuming, and close job/process handles on terminal outcome. Avoid assuming `subprocess.Popen` exposes a resumable thread handle. Allow fallback only if equivalent tested process-tree termination exists; otherwise fail safely. Do not log stdout/stderr or secrets.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_process_control.py` → PASS; Windows CI runs child cleanup test (Linux marks Windows-only).
@@ -173,6 +243,20 @@
 - Consumes: `WorkerHandle.poll()` and `WorkerResult.retryable`; ID-specific status updated from worker outcomes.
 
 - [ ] **Step 1: Write failing tests.** `test_five_active_limits_max_running_to_three`, `test_three_active_start_without_wait_queue`, `test_first_attempt_D_E_precede_A_retry`, `test_A_failure_B_C_success_batch_partial`, `test_one_bad_server_fails_without_blocking_B_C`, `test_inactive_skipped_and_zero_active_exit_3`, `test_single_job_global_lock_prevents_second_batch`, `test_deadlines_12min_server_30min_batch`. Stub launcher and clock to simulate A retry_wait, D/E queued and hung workers without real sleeps; assert active slots never exceed 3. An existing A with invalid connection field or missing CSS fails only A while B/C succeed.
+    **대표 검증 테스트:**
+
+```python
+def test_five_active_limits_max_running_to_three(five_server_snapshot,
+                                                 fake_launcher, fake_clock, tmp_path):
+    summary = run_batch(five_server_snapshot, launcher=fake_launcher,
+                        clock=fake_clock, home=tmp_path)
+    assert fake_launcher.max_active == 3
+    assert fake_launcher.started_server_ids[:3] == [
+        "airwave-01", "airwave-02", "airwave-03"
+    ]
+    assert summary.total == 5
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_orchestrator.py` → FAIL.
 - [ ] **Step 3: Implement parent scheduler.** Use FIFO first-attempt queue plus retry-ready time min-heap; never block a slot during 180s delay, enforce per-server attempts ≤2. Validate each server for readiness without aborting other servers; global structural config failure prevents all. Take global `run.lock` only in parent; launch next eligible server when an active worker terminates. Cancel on deadlines via `WorkerHandle.terminate()`, aggregate independent results.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_orchestrator.py` → PASS.
@@ -191,6 +275,16 @@
 - Return codes: 0(all success), 2(partial/warning), 1(all active failed), 3(no active/invalid global config). Disabled servers SKIPPED.
 
 - [ ] **Step 1: Write failing tests.** `test_summary_tracks_each_server`, `test_previous_crashed_batch_becomes_interrupted_not_replayed`, `test_log_whitelist_redacts_url_user_secret_and_csv_cells`, `test_exit_codes_distinguish_failure_modes`. Assert server_id/run_id in local logs; summary written atomically.
+    **대표 검증 테스트:**
+
+```python
+def test_summary_tracks_each_server(tmp_path, batch_summary, server_results):
+    write_batch_summary(tmp_path, batch_summary, server_results)
+    result = read_last_batch(tmp_path)
+    assert result["run_id"] == batch_summary.run_id
+    assert set(result["servers"]) == set(server_results)
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_batch_events.py` → FAIL.
 - [ ] **Step 3: Add structured event & crash recovery.** Reconciliation marks old incomplete batches INTERRUPTED on next start and does **not** retry them automatically. Retain original `record`/`last_event` for legacy tests.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_batch_events.py tests/test_engine.py` → PASS.
@@ -208,6 +302,18 @@
 - GUI: table view shows name, enabled, connection/CSS-ready, queued/running/retry/success/warning/failed/skipped/interrupted, rows, last download. Async subprocess launch + main-thread `after` poll only.
 
 - [ ] **Step 1: Write failing tests.** `test_old_run_invokes_all`, `test_worker_mode_requires_compatible_flags`, `test_schedule_uses_one_existing_task`, `test_gui_add_edit_disable_delete_no_csv_deletion`, `test_gui_never_blocks_mainloop_during_batch`. Use mocks; guard against disabled server or nonexistent ID actions.
+    **대표 검증 테스트:**
+
+```python
+def test_schedule_keeps_single_task(monkeypatch):
+    calls = []
+    monkeypatch.setattr(scheduler, "_powershell",
+                        lambda script, *, env_extra=None: calls.append(env_extra))
+    scheduler.register_daily("09:05")
+    assert len(calls) == 1
+    assert "--run-all" in calls[0]["AW_ARGS"]
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_multi_cli.py tests/test_multi_gui.py` → FAIL.
 - [ ] **Step 3: Implement CLI/GUI additions with existing tkinter.** Avoid editing `portal.py` and preserve current labels; add 5-server list and one-time server test, global execution progress. GUI does not manipulate tkinter from background workers; stop button only requests process cancellation through coordinator.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q tests/test_multi_cli.py tests/test_multi_gui.py tests/test_scheduler.py` → PASS.
@@ -225,6 +331,17 @@
 - Produces: Windows CI artifact `AirWaveCsvExporter-Windows` and documented migration/rollback / real-server acceptance checklist.
 
 - [ ] **Step 1: Write failing Windows E2E tests.** `test_three_mock_airwave_hosts_export_independently`, `test_five_servers_fifo_max_three`, `test_mock_B_failure_does_not_block_A_C_D_E`, `test_frozen_exe_worker_start_and_tree_shutdown`. Run multiple local mock HTTPS hosts or isolated fake workers where TLS mock is unnecessary; **do not disable certificate verification in production code**.
+    **대표 검증 테스트:**
+
+```python
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Edge CI")
+def test_five_mock_servers_are_isolated(mock_five_server_batch):
+    result = mock_five_server_batch()
+    assert result.total == 5
+    assert result.success == 5
+    assert result.exit_code == 0
+```
+
 - [ ] **Step 2: Run RED.** `python -m pytest -q tests/test_multi_airwave_e2e.py` → FAIL before final wiring; Windows-only tests skip explicitly on Linux.
 - [ ] **Step 3: Finish integration, docs and CI.** Windows workflow includes pytest, Ruff `--select E4,E7,E9,F`, compileall, Windows EXE build, `--help` startup, synthetic 3/5-host export, child process cleanup. README explains maximum 5, default 3, 180s retry, 15~30s wait, per-server output, v1 migration, no-login session restriction, selectors verification, local-only logs. Real AirWave 8.2.14.0 UI selectors and actual CSV completeness require operator verification.
 - [ ] **Step 4: Run GREEN.** `python -m pytest -q`, `python -m ruff check src tests --select E4,E7,E9,F`; Windows CI all jobs PASS, built EXE startup check PASS and artifact exists.
