@@ -77,17 +77,30 @@ def clear_batch_active(home: Path) -> None:
 
 def reconcile_interrupted_batch(home: Path) -> None:
     active = home / "state" / "active_batch.json"
-    if active.exists():
-        try:
-            info = json.loads(active.read_text(encoding="utf-8"))
-            _write_json_atomic(home / "state" / "last_interrupted.json",
-                               {"run_id": info.get("run_id"), "status": "INTERRUPTED"})
-        except (OSError, json.JSONDecodeError):
-            pass
-        clear_batch_active(home)
-
-
-def write_batch_progress(home: Path, run_id: str, statuses: dict[str, str]) -> None:
-    _write_json_atomic(
-        home / "state" / "progress.json", {"run_id": run_id, "servers": statuses}
-    )
+    if not active.exists():
+        return
+    try:
+        info = json.loads(active.read_text(encoding="utf-8"))
+        run_id = info["run_id"]
+        progress_path = home / "state" / "progress.json"
+        progress = {}
+        if progress_path.exists():
+            current = json.loads(progress_path.read_text(encoding="utf-8"))
+            if current.get("run_id") == run_id:
+                progress = current.get("servers", {})
+        if not progress:
+            snapshot = home / "runs" / run_id / "snapshot.json"
+            if snapshot.exists():
+                data = json.loads(snapshot.read_text(encoding="utf-8"))
+                progress = {s["id"]: "INTERRUPTED" for s in data.get("servers", [])}
+        statuses = {
+            sid: {"status": status if status in
+                  ("SUCCESS", "WARNING", "FAILED", "SKIPPED") else "INTERRUPTED"}
+            for sid, status in progress.items()
+        }
+        summary = {"run_id": run_id, "status": "INTERRUPTED", "servers": statuses}
+        _write_json_atomic(home / "state" / "last_interrupted.json", summary)
+        _write_json_atomic(home / "state" / "last_batch.json", summary)
+    except (OSError, ValueError, TypeError, KeyError):
+        pass  # 실패한 기록을 성공으로 처리하지는 않습니다.
+    clear_batch_active(home)
