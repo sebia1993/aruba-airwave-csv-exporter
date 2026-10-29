@@ -1,238 +1,324 @@
-"""초급 네트워크 운영자를 위한 한국어 Windows GUI (tkinter)."""
+"""한국어 다중 AirWave 관리 UI. Windows 예약과 각 서버 실행을 별도 프로세스로 시작."""
 
 from __future__ import annotations
 
+import json
 import os
-from pathlib import Path
 import subprocess
+import sys
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .config import Config, ProfileError, SelectorProfile, app_home
+from .config import SELECTOR_TEMPLATE, app_home
 from .credentials import CredentialError, CredentialStore
-from .events import last_event
-from .scheduler import ScheduleError, executable_action, register_daily, task_status, unregister_daily
+from .events import read_last_batch
+from .gui_model import change_server, remove_server, set_enabled
+from .migration import migrate_if_needed
+from .multi_config import (
+    add_server, registry_path, save_v2, validate_settings,
+)
+from .paths import server_export_dir, server_selectors_path
+from .scheduler import ScheduleError, register_daily, task_status, unregister_daily
 
 
 class ExporterWindow(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("AirWave CSV Exporter")
-        self.geometry("675x570")
-        self.minsize(600, 520)
+        self.title("AirWave CSV Exporter - 다중 서버")
+        self.geometry("960x700")
+        self.minsize(800, 610)
         try:
-            self.config_model = Config.load()
-        except (ValueError, OSError, TypeError):
-            self.config_model = Config()
-            messagebox.showwarning("설정 오류", "기존 설정을 읽을 수 없어 기본값으로 시작합니다.")
-        cfg = self.config_model
-        self.server = tk.StringVar(value=cfg.server_url)
-        self.username = tk.StringVar(value=cfg.username)
-        self.password = tk.StringVar()
-        self.export_dir = tk.StringVar(value=cfg.export_dir)
-        self.schedule_time = tk.StringVar(value=cfg.schedule_time)
-        self.headless = tk.BooleanVar(value=cfg.headless)
-        self.status = tk.StringVar(value="상태 확인 전")
-        self.last = tk.StringVar(value="실행 결과 없음")
+            self.settings = migrate_if_needed(app_home())
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror("설정 오류", "기존 설정을 읽을 수 없습니다. 오류를 수정하세요.")
+            self.destroy()
+            return
+        self.time_var = tk.StringVar(value=self.settings.schedule_time)
+        self.parallel_var = tk.StringVar(value=str(self.settings.parallel_limit))
+        self.dir_var = tk.StringVar(value=self.settings.export_root)
+        self.name_var = tk.StringVar()
+        self.url_var = tk.StringVar()
+        self.user_var = tk.StringVar()
+        self.pass_var = tk.StringVar()
+        self.enabled_var = tk.BooleanVar(value=True)
+        self.status_var = tk.StringVar(value="서버를 선택하거나 추가하세요.")
         self._build()
         self.refresh()
 
-    def _build(self) -> None:
-        container = ttk.Frame(self, padding=18)
-        container.pack(fill="both", expand=True)
-        ttk.Label(
-            container, text="AirWave 장비 목록 CSV 자동 다운로드",
-            font=("맑은 고딕", 14, "bold")
-        ).pack(anchor="w")
-        ttk.Label(
-            container, text="Devices → List / Default View: Devices / 전체 폴더 확장 / 15~30초 대기",
-        ).pack(anchor="w", pady=(6, 10))
+    def _build(self):
+        root = ttk.Frame(self, padding=14)
+        root.pack(fill="both", expand=True)
+        ttk.Label(root, text="AirWave 장비 목록 CSV 자동 수집",
+                  font=("맑은 고딕", 14, "bold")).pack(anchor="w")
+        ttk.Label(root, text="최대 5대 등록 · 기본 3대 병렬 실행 · 추가 서버는 대기열",
+                  ).pack(anchor="w", pady=(4, 10))
+        schedule = ttk.LabelFrame(root, text="전체 예약 설정", padding=10)
+        schedule.pack(fill="x")
+        ttk.Label(schedule, text="매일 실행").grid(row=0, column=0, padx=5)
+        ttk.Entry(schedule, textvariable=self.time_var, width=9).grid(row=0, column=1)
+        ttk.Label(schedule, text="동시 실행").grid(row=0, column=2, padx=(18, 5))
+        ttk.Combobox(schedule, textvariable=self.parallel_var,
+                     values=[str(n) for n in range(1, 6)],
+                     state="readonly", width=6).grid(row=0, column=3)
+        ttk.Label(schedule, text="CSV 상위 폴더").grid(row=1, column=0, sticky="w", pady=8)
+        ttk.Entry(schedule, textvariable=self.dir_var, width=68).grid(
+            row=1, column=1, columnspan=4, sticky="ew", pady=8)
+        ttk.Button(schedule, text="찾기", command=self.choose_dir).grid(row=1, column=5)
+        ttk.Button(schedule, text="설정 저장", command=self.save).grid(row=0, column=4, padx=5)
+        ttk.Button(schedule, text="예약 등록/변경", command=self.register).grid(
+            row=0, column=5, padx=5)
+        ttk.Button(schedule, text="예약 해제", command=self.unregister).grid(
+            row=0, column=6, padx=5)
+        schedule.columnconfigure(4, weight=1)
 
-        form = ttk.LabelFrame(container, text="AirWave 접속 및 저장 설정", padding=12)
-        form.pack(fill="x")
-        form.columnconfigure(1, weight=1)
-        entries = [
-            ("AirWave HTTPS 주소", self.server, False),
-            ("로그인 ID", self.username, False),
-            ("로그인 비밀번호", self.password, True),
-        ]
-        for i, (caption, variable, secret) in enumerate(entries):
-            ttk.Label(form, text=caption).grid(row=i, column=0, sticky="w", padx=(0, 12), pady=5)
-            kwargs = {"show": "•"} if secret else {}
-            ttk.Entry(form, textvariable=variable, **kwargs).grid(
-                row=i, column=1, sticky="ew", pady=5
-            )
+        table_frame = ttk.LabelFrame(root, text="서버 목록 (선택 후 수정·개별 테스트)", padding=10)
+        table_frame.pack(fill="both", expand=True, pady=(12, 7))
+        cols = ("name", "enabled", "state", "rows", "download")
+        self.table = ttk.Treeview(table_frame, columns=cols, show="tree headings",
+                                  height=8, selectmode="browse")
+        self.table.heading("#0", text="서버 ID")
+        self.table.heading("name", text="AirWave 이름")
+        self.table.heading("enabled", text="활성")
+        self.table.heading("state", text="최근 결과")
+        self.table.heading("rows", text="장비 수")
+        self.table.heading("download", text="마지막 CSV")
+        self.table.column("#0", width=110)
+        self.table.column("name", width=145)
+        self.table.column("enabled", width=70, anchor="center")
+        self.table.column("state", width=95, anchor="center")
+        self.table.column("rows", width=70, anchor="center")
+        self.table.column("download", width=210)
+        self.table.pack(fill="both", expand=True)
+        self.table.bind("<<TreeviewSelect>>", self.selected)
 
-        ttk.Label(form, text="CSV 저장 폴더").grid(
-            row=3, column=0, sticky="w", padx=(0, 12), pady=5
-        )
-        ttk.Entry(form, textvariable=self.export_dir).grid(row=3, column=1, sticky="ew")
-        ttk.Button(form, text="찾기", command=self.choose_directory).grid(
-            row=3, column=2, padx=(6, 0)
-        )
-        ttk.Label(form, text="매일 실행 시간").grid(row=4, column=0, sticky="w", pady=5)
-        ttk.Entry(form, textvariable=self.schedule_time, width=8).grid(
-            row=4, column=1, sticky="w", pady=5
-        )
-        ttk.Label(form, text="HH:MM (예: 09:00)").grid(
-            row=4, column=1, sticky="w", padx=(75, 0)
-        )
-        ttk.Checkbutton(
-            form, text="자동 실행 시 브라우저 숨김 (권장)", variable=self.headless
-        ).grid(row=5, column=1, sticky="w", pady=(4, 0))
+        edit = ttk.LabelFrame(root, text="서버 추가/수정", padding=10)
+        edit.pack(fill="x", pady=7)
+        ttk.Label(edit, text="이름").grid(row=0, column=0, sticky="w")
+        ttk.Entry(edit, textvariable=self.name_var, width=17).grid(row=0, column=1)
+        ttk.Label(edit, text="HTTPS 주소").grid(row=0, column=2, padx=(10, 2))
+        ttk.Entry(edit, textvariable=self.url_var, width=42).grid(row=0, column=3, sticky="ew")
+        ttk.Label(edit, text="계정 ID").grid(row=1, column=0, sticky="w", pady=8)
+        ttk.Entry(edit, textvariable=self.user_var, width=17).grid(row=1, column=1)
+        ttk.Label(edit, text="비밀번호").grid(row=1, column=2, padx=(10, 2))
+        ttk.Entry(edit, textvariable=self.pass_var, show="•", width=26).grid(
+            row=1, column=3, sticky="w")
+        ttk.Checkbutton(edit, text="예약 수집 대상", variable=self.enabled_var).grid(
+            row=2, column=1, sticky="w")
+        edit.columnconfigure(3, weight=1)
 
-        buttons = ttk.Frame(container)
-        buttons.pack(fill="x", pady=12)
-        ttk.Button(buttons, text="설정 저장", command=self.save).pack(side="left", padx=3)
-        ttk.Button(buttons, text="지금 테스트", command=self.run_now).pack(side="left", padx=3)
-        ttk.Button(buttons, text="매일 예약 등록/변경", command=self.schedule).pack(
-            side="left", padx=3
-        )
-        ttk.Button(buttons, text="예약 해제", command=self.unschedule).pack(
-            side="left", padx=3
-        )
+        actions = ttk.Frame(root)
+        actions.pack(fill="x", pady=8)
+        for caption, callback in [
+            ("신규 입력", self.reset_form), ("서버 추가", self.add),
+            ("선택 서버 저장", self.edit), ("서버 삭제", self.delete),
+            ("선택자 파일 열기", self.open_selectors),
+            ("선택 서버 테스트", self.test_one),
+            ("전체 지금 실행", self.run_all),
+            ("CSV 폴더 열기", self.open_export_dir),
+        ]:
+            ttk.Button(actions, text=caption, command=callback).pack(side="left", padx=3)
+        ttk.Label(root, textvariable=self.status_var, wraplength=910).pack(
+            anchor="w", pady=8)
+        ttk.Label(root, text=(
+            "각 서버: Default View = Devices → Top → 전체 폴더 확장 → 15~30초 로딩 후 CSV\n"
+            "비밀번호는 Windows 자격 증명 관리자에 저장 · 미확인 CSS는 해당 서버만 실패\n"
+            "예약 실행은 현재 Windows 계정에 로그인된 경우에 동작합니다."
+        )).pack(anchor="w")
 
-        tools = ttk.LabelFrame(container, text="현장 화면 연결 및 결과", padding=12)
-        tools.pack(fill="x")
-        ttk.Label(
-            tools, text="필수 조건: Default View = Devices | 목록 대기: 15~30초",
-        ).pack(anchor="w", pady=(0, 7))
-        ttk.Label(tools, textvariable=self.status, wraplength=610).pack(anchor="w", pady=3)
-        ttk.Label(tools, textvariable=self.last, wraplength=610).pack(anchor="w", pady=3)
-        bottom = ttk.Frame(tools)
-        bottom.pack(fill="x", pady=(10, 0))
-        ttk.Button(bottom, text="현장 선택자 파일 열기", command=self.open_selectors).pack(
-            side="left", padx=(0, 6)
-        )
-        ttk.Button(bottom, text="결과 새로고침", command=self.refresh).pack(
-            side="left", padx=6
-        )
-        ttk.Button(bottom, text="CSV 폴더 열기", command=self.open_export_dir).pack(
-            side="left", padx=6
-        )
-        ttk.Button(bottom, text="로그 폴더 열기", command=self.open_logs).pack(
-            side="left", padx=6
-        )
-        ttk.Label(
-            container,
-            text=(
-                "실제 AirWave 화면의 선택자 확인 전에는 자동 다운로드가 차단됩니다.\n"
-                "예약 작업은 현재 Windows 계정이 로그인된 경우에 실행됩니다.\n"
-                "비밀번호는 Windows 자격 증명 관리자에만 저장합니다."
-            ), justify="left",
-        ).pack(anchor="w", pady=(14, 0))
+    def _selected_id(self) -> str | None:
+        items = self.table.selection()
+        return items[0] if items else None
 
-    def choose_directory(self) -> None:
-        initial = self.export_dir.get()
-        chosen = filedialog.askdirectory(initialdir=initial if Path(initial).exists() else None)
-        if chosen:
-            self.export_dir.set(chosen)
+    def _current(self):
+        sid = self._selected_id()
+        return next((s for s in self.settings.servers if s.id == sid), None)
 
-    def _save(self) -> bool:
-        model = Config(
-            server_url=self.server.get().strip(),
-            username=self.username.get().strip(),
-            export_dir=self.export_dir.get().strip(),
-            schedule_time=self.schedule_time.get().strip(),
-            headless=self.headless.get(),
-            schedule_enabled=self.config_model.schedule_enabled,
-        )
-        model.validate(require_connection=True)
-        password = self.password.get()
-        if password:
-            CredentialStore.set(model.server_url, model.username, password)
-            self.password.set("")
-        model.save()
-        self.config_model = model
-        return True
+    def selected(self, _event=None):
+        profile = self._current()
+        if not profile:
+            return
+        self.name_var.set(profile.display_name)
+        self.url_var.set(profile.server_url)
+        self.user_var.set(profile.username)
+        self.pass_var.set("")
+        self.enabled_var.set(profile.enabled)
+
+    def reset_form(self):
+        self.table.selection_remove(self.table.selection())
+        for v in (self.name_var, self.url_var, self.user_var, self.pass_var):
+            v.set("")
+        self.enabled_var.set(True)
+
+    def choose_dir(self):
+        directory=filedialog.askdirectory()
+        if directory:
+            self.dir_var.set(directory)
 
     def save(self) -> bool:
         try:
-            return self._save()
-        except (ValueError, CredentialError, OSError, TypeError) as exc:
-            messagebox.showerror("저장 실패", str(exc))
+            self.settings.schedule_time = self.time_var.get().strip()
+            self.settings.parallel_limit = int(self.parallel_var.get())
+            self.settings.export_root = self.dir_var.get().strip()
+            validate_settings(self.settings)
+            save_v2(self.settings, registry_path(app_home()))
+            self.status_var.set("설정을 저장했습니다.")
+            return True
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("설정 저장 실패", str(exc))
             return False
 
-    def run_now(self) -> None:
-        if not self.save():
-            return
-        executable, argument_string = executable_action()
-        args = [str(executable), *argument_string.split()]
+    def add(self):
         try:
-            subprocess.Popen(args, cwd=str(executable.parent), close_fds=True)
-            messagebox.showinfo(
-                "작업 시작", "CSV 수집을 시작했습니다. 완료 후 '결과 새로고침'을 눌러 확인하세요."
-            )
-        except OSError:
-            messagebox.showerror("실행 실패", "작업 프로세스를 시작하지 못했습니다.")
-
-    def schedule(self) -> None:
-        if not self.save():
-            return
-        try:
-            register_daily(self.config_model.schedule_time)
-            self.config_model.schedule_enabled = True
-            self.config_model.save()
+            if not self.pass_var.get():
+                raise ValueError("새 서버의 비밀번호를 입력하세요.")
+            profile = add_server(self.settings, name=self.name_var.get(),
+                                 url=self.url_var.get(), username=self.user_var.get())
+            try:
+                CredentialStore.set_for_server(profile.id, self.pass_var.get())
+                from dataclasses import replace
+                self.settings.servers[-1] = replace(profile, enabled=self.enabled_var.get())
+                if not self.save():
+                    raise ValueError("설정 저장에 실패했습니다.")
+            except Exception:
+                self.settings.servers.remove(profile) if profile in self.settings.servers else None
+                raise
+            self.pass_var.set("")
             self.refresh()
-            messagebox.showinfo("예약 등록", "매일 예약 실행을 등록했습니다.")
-        except (ScheduleError, OSError) as exc:
+            self.table.selection_set(profile.id)
+            self.selected()
+        except (ValueError, CredentialError) as exc:
+            messagebox.showerror("서버 추가 실패", str(exc))
+
+    def edit(self):
+        server = self._current()
+        if not server:
+            messagebox.showwarning("선택", "수정할 서버를 먼저 선택하세요.")
+            return
+        try:
+            previous = server
+            changed = change_server(
+                self.settings, server.id, name=self.name_var.get(), url=self.url_var.get(),
+                username=self.user_var.get()
+            )
+            set_enabled(self.settings, server.id, self.enabled_var.get())
+            if self.pass_var.get():
+                CredentialStore.set_for_server(server.id, self.pass_var.get())
+            if not self.save():
+                raise ValueError("설정 저장에 실패했습니다.")
+            self.pass_var.set("")
+            self.refresh()
+            self.table.selection_set(server.id)
+        except (ValueError, CredentialError) as exc:
+            messagebox.showerror("수정 실패", str(exc))
+
+    def delete(self):
+        sid=self._selected_id()
+        if not sid:
+            return
+        if not messagebox.askyesno(
+            "서버 삭제", "서버 등록을 삭제하겠습니까?\n기존 CSV 파일은 삭제되지 않습니다."
+        ):
+            return
+        remove_server(self.settings, sid)
+        self.save()
+        self.reset_form()
+        self.refresh()
+
+    def open_selectors(self):
+        server=self._current()
+        if not server:
+            messagebox.showwarning("선택", "먼저 서버를 선택하세요.")
+            return
+        path=server_selectors_path(app_home(), server.id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(json.dumps(SELECTOR_TEMPLATE, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        if os.name=="nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+
+    def _command(self, *args):
+        prefix=[sys.executable]
+        if not getattr(sys, "frozen", False):
+            prefix += ["-m", "airwave_csv"]
+        try:
+            subprocess.Popen(
+                [*prefix,*args,"--headless"],
+                close_fds=True,
+                cwd=str(Path(sys.executable).resolve().parent),
+            )
+            self.status_var.set("수집을 시작했습니다. 서버별 결과는 자동 갱신됩니다.")
+        except OSError:
+            messagebox.showerror("실행 실패", "다운로드 프로세스를 시작하지 못했습니다.")
+
+    def test_one(self):
+        sid=self._selected_id()
+        if sid and self.save():
+            self._command("--run-one",sid)
+
+    def run_all(self):
+        if self.save():
+            self._command("--run-all")
+
+    def register(self):
+        if not self.save():
+            return
+        try:
+            register_daily(self.settings.schedule_time)
+            messagebox.showinfo("예약 완료", "하루 1회 전체 서버 수집이 등록되었습니다.")
+            self.refresh()
+        except ScheduleError as exc:
             messagebox.showerror("예약 실패", str(exc))
 
-    def unschedule(self) -> None:
+    def unregister(self):
         try:
             unregister_daily()
-            self.config_model.schedule_enabled = False
-            self.config_model.save()
             self.refresh()
-        except (ScheduleError, OSError) as exc:
-            messagebox.showerror("예약 해제 실패", str(exc))
+        except ScheduleError as exc:
+            messagebox.showerror("해제 실패", str(exc))
 
-    def open_selectors(self) -> None:
-        path = app_home() / "selectors.json"
-        try:
-            SelectorProfile.load(path)
-        except ProfileError:
-            pass  # 빈 템플릿을 만드는 것도 허용합니다.
-        except (ValueError, OSError) as exc:
-            messagebox.showerror("파일 오류", str(exc))
-            return
-        self._open_path(path)
-
-    def open_export_dir(self) -> None:
-        path = Path(os.path.expandvars(self.export_dir.get())).expanduser()
+    def open_export_dir(self):
+        path=Path(self.dir_var.get()).expanduser()
         path.mkdir(parents=True, exist_ok=True)
-        self._open_path(path)
-
-    def open_logs(self) -> None:
-        path = app_home() / "logs"
-        path.mkdir(parents=True, exist_ok=True)
-        self._open_path(path)
-
-    @staticmethod
-    def _open_path(path: Path) -> None:
-        if os.name == "nt":
+        if os.name=="nt":
             os.startfile(path)  # type: ignore[attr-defined]
-        else:
-            messagebox.showinfo("폴더 위치", str(path))
 
-    def refresh(self) -> None:
+    def refresh(self):
+        state=read_last_batch(app_home())
+        per=state.get("servers",{})
+        progress = {}
+        progress_file = app_home() / "state" / "progress.json"
+        active = app_home() / "state" / "active_batch.json"
+        if active.exists() and progress_file.exists():
+            try:
+                run_id=json.loads(active.read_text(encoding="utf-8"))["run_id"]
+                p=json.loads(progress_file.read_text(encoding="utf-8"))
+                if p.get("run_id")==run_id:
+                    progress=p.get("servers",{})
+            except (OSError, ValueError, KeyError):
+                pass
+        selection=self._selected_id()
+        for item in self.table.get_children():
+            self.table.delete(item)
+        for s in self.settings.servers:
+            result=per.get(s.id,{})
+            state_text=progress.get(s.id) or result.get("status","준비")
+            self.table.insert("", "end", iid=s.id,text=s.id,values=(
+                s.display_name, "사용" if s.enabled else "제외",
+                state_text, result.get("rows","-"),result.get("filename","-"),
+            ))
+        if selection and self.table.exists(selection):
+            self.table.selection_set(selection)
         try:
-            state = task_status()
-            self.status.set("Windows 예약 상태: " + state)
+            schedule=task_status()
         except ScheduleError:
-            self.status.set("Windows 예약 상태: 이 PC에서는 확인할 수 없습니다.")
-        event = last_event(app_home())
-        if event:
-            self.last.set(
-                "최근 실행: {timestamp} | {status} | 오류코드 {code} | {rows}건 | {filename}".format(
-                    timestamp=event.get("timestamp", "-"),
-                    status=event.get("status", "-"),
-                    code=event.get("code", "-"),
-                    rows=event.get("rows", "-"),
-                    filename=event.get("filename", "-"),
-                )
-            )
+            schedule="확인 불가"
+        self.status_var.set(f"등록 서버 {len(self.settings.servers)}/5 · 예약: {schedule}")
+        self.after(2000,self.refresh)
 
 
-def launch() -> None:
-    ExporterWindow().mainloop()
+def launch():
+    app=ExporterWindow()
+    if app.winfo_exists():
+        app.mainloop()
