@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from datetime import datetime
-import io
 import os
 from pathlib import Path
 import shutil
@@ -32,43 +31,56 @@ class SavedExport:
 
 
 def analyze(path: Path) -> CsvInfo:
-    if not path.is_file() or path.stat().st_size == 0:
+    """CSV 전체를 메모리에 적재하지 않고 기존 인코딩·열 구조 판정을 유지합니다."""
+    if not path.is_file():
         raise CsvValidationError("비어 있는 다운로드 파일입니다.")
-    data = path.read_bytes()
-    prefix = data.lstrip()[:200].lower()
+    size = path.stat().st_size
+    if size == 0:
+        raise CsvValidationError("비어 있는 다운로드 파일입니다.")
+    with path.open("rb") as source:
+        initial = source.read(4096)
+    prefix = initial.lstrip()[:200].lower()
     if (b"<html" in prefix or b"<!doctype html" in prefix
             or prefix.startswith((b"{", b"["))):
         raise CsvValidationError("CSV 대신 HTML 또는 JSON 오류 페이지가 다운로드됐습니다.")
-    text = None
-    for encoding in (("utf-16",) if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "cp949")):
+
+    encodings = (("utf-16",) if initial.startswith((b"\xff\xfe", b"\xfe\xff"))
+                 else ("utf-8-sig", "cp949"))
+    for encoding in encodings:
         try:
-            text = data.decode(encoding)
-            break
+            with path.open("r", encoding=encoding, newline="") as stream:
+                sample = stream.read(4096)
+                if "\0" in sample:
+                    raise CsvValidationError("지원하지 않는 CSV 인코딩/형식입니다.")
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+                except csv.Error:
+                    dialect = csv.excel
+                stream.seek(0)
+                records = csv.reader(stream, dialect=dialect)
+                header = next(records, ())
+                if (len(header) < 2 or not all(cell.strip() for cell in header)
+                        or any("\0" in cell for cell in header)):
+                    raise CsvValidationError("CSV 헤더가 누락되었거나 비정상입니다.")
+                count = 0
+                for row in records:
+                    if any("\0" in cell for cell in row):
+                        raise CsvValidationError("지원하지 않는 CSV 인코딩/형식입니다.")
+                    if not any(cell.strip() for cell in row):
+                        continue
+                    if len(row) != len(header):
+                        raise CsvValidationError("CSV 데이터의 열 개수가 일치하지 않습니다.")
+                    count += 1
+                if count == 0:
+                    raise CsvValidationError("장비 데이터가 0건입니다.")
+                return CsvInfo(count, tuple(header), size)
         except UnicodeDecodeError:
+            # 원본과 동일하게 UTF-8 실패 시 CP949 재시도합니다.
             continue
-    if text is None or "\0" in text:
-        raise CsvValidationError("지원하지 않는 CSV 인코딩/형식입니다.")
-    try:
-        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
-    except csv.Error:
-        dialect = csv.excel
-    try:
-        records = csv.reader(io.StringIO(text, newline=""), dialect=dialect)
-        header = next(records, ())
-        if len(header) < 2 or not all(cell.strip() for cell in header):
-            raise CsvValidationError("CSV 헤더가 누락되었거나 비정상입니다.")
-        count = 0
-        for row in records:
-            if not any(cell.strip() for cell in row):
-                continue
-            if len(row) != len(header):
-                raise CsvValidationError("CSV 데이터의 열 개수가 일치하지 않습니다.")
-            count += 1
-    except (csv.Error, UnicodeError) as exc:
-        raise CsvValidationError("CSV를 해석할 수 없습니다.") from exc
-    if count == 0:
-        raise CsvValidationError("장비 데이터가 0건입니다.")
-    return CsvInfo(count, tuple(header), len(data))
+        except csv.Error as exc:
+            raise CsvValidationError("CSV를 해석할 수 없습니다.") from exc
+    raise CsvValidationError("지원하지 않는 CSV 인코딩/형식입니다.")
+
 
 
 def store_export(
