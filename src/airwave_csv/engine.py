@@ -21,6 +21,7 @@ class RunResult:
     status: str
     message: str
     saved: SavedExport | None = None
+    retryable: bool = False
 
 
 def run_once(
@@ -93,3 +94,31 @@ def run_once(
     except Exception:
         record(base, stage="unexpected", status="failed", code=99)
         return RunResult(99, "failed", "처리되지 않은 오류가 발생했습니다. 실행 로그를 확인하세요.")
+
+
+def collect_attempt(
+    config: Config, profile: SelectorProfile, password: str,
+    *, portal_factory=AirWavePortal, home: Path,
+) -> RunResult:
+    """잠금/재시도/비밀정보 로그 없는 단일 AirWave 다운로드 시도."""
+    config.validate(require_connection=True)
+    config.export_path.mkdir(parents=True, exist_ok=True)
+    staged = config.export_path / (".download-" + uuid4().hex + ".part")
+    try:
+        expected_rows = portal_factory(config, profile).download(staged, password)
+        saved = store_export(
+            staged, config.export_path, expected_rows=expected_rows,
+            drop_warning_percent=config.drop_warning_percent,
+        )
+        if saved.warning_drop:
+            return RunResult(2, "warning", "장비 수 감소로 latest.csv 갱신을 보류했습니다.",
+                             saved, False)
+        return RunResult(0, "success", "CSV 검증 및 저장에 성공했습니다.", saved, False)
+    except PortalError as exc:
+        return RunResult(exc.code, "failed", str(exc), None, exc.code in (47, 48))
+    except CsvValidationError as exc:
+        return RunResult(52, "failed", str(exc), None, True)
+    except (OSError, ValueError) as exc:
+        return RunResult(40, "failed", "CSV 수집 경로 또는 설정에 오류가 있습니다.", None, False)
+    finally:
+        staged.unlink(missing_ok=True)
