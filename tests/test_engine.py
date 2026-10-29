@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from airwave_csv.config import Config, SELECTOR_TEMPLATE, SelectorProfile
 from airwave_csv.engine import run_once
 from airwave_csv.portal import PortalError

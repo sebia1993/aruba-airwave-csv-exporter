@@ -20,6 +20,8 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: python -m pip install ".[test,build]"
+      - name: Ruff static checks
+        run: python -m ruff check src tests
       - name: Unit tests
         run: python -m pytest -q
       - name: Compile Python files
@@ -27,6 +29,11 @@ jobs:
       - name: Package EXE (Microsoft Edge required on target PC)
         shell: pwsh
         run: ./build/windows_build.ps1
+      - name: Packaged EXE startup smoke test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath 'dist/AirWaveCsvExporter/AirWaveCsvExporter.exe' -ArgumentList '--help' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'EXE startup failed' }
       - name: Upload Windows EXE (folder must remain intact)
         uses: actions/upload-artifact@v4
         with:
@@ -44,4 +51,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install ".[test]"
+      - run: python -m ruff check src tests
       - run: python -m pytest -q
