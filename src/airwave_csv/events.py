@@ -53,6 +53,24 @@ def _write_json_atomic(path: Path, data: dict) -> None:
         tmp.unlink(missing_ok=True)
 
 
+
+def write_batch_progress(home: Path, run_id: str, statuses: dict[str, str]) -> None:
+    """현재 배치 진행 상태만 원자적으로 저장하며 민감정보는 저장하지 않습니다."""
+    allowed = {"QUEUED", "RUNNING", "RETRY_WAIT", "SUCCESS", "WARNING",
+               "FAILED", "SKIPPED", "INTERRUPTED"}
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("올바른 실행 ID가 필요합니다.")
+    if not isinstance(statuses, dict) or any(
+        not isinstance(sid, str) or not sid
+        or status not in allowed for sid, status in statuses.items()
+    ):
+        raise ValueError("잘못된 서버 실행 상태가 포함됐습니다.")
+    _write_json_atomic(home / "state" / "progress.json", {
+        "run_id": run_id,
+        "servers": dict(statuses),
+    })
+
+
 def write_batch_summary(home: Path, summary, server_results: dict) -> None:
     from dataclasses import asdict
 
