@@ -79,3 +79,25 @@ def test_multiline_quoted_cell(tmp_path):
     file = tmp_path / "quoted.csv"
     file.write_text('Name,Note\nap1,"line1\nline2"\n', encoding="utf-8")
     assert analyze(file).rows == 1
+
+
+def test_exact_drop_threshold_preserves_latest(tmp_path):
+    """100대에서 90대로 감소하면 정확히 10%이므로 경고 처리해야 합니다."""
+    latest = tmp_path / "latest.csv"
+    write_csv(latest, 100)
+    old = latest.read_bytes()
+    staged = tmp_path / "download.part"
+    write_csv(staged, 90)
+    result = store_export(staged, tmp_path, expected_rows=90, drop_warning_percent=10)
+    assert result.warning_drop
+    assert latest.read_bytes() == old
+
+
+def test_zero_threshold_does_not_warn_on_unchanged_count(tmp_path):
+    """임계값을 0%로 지정하더라도 장비 수가 유지되면 경고하지 않습니다."""
+    latest = tmp_path / "latest.csv"
+    write_csv(latest, 3)
+    staged = tmp_path / "download.part"
+    write_csv(staged, 3)
+    result = store_export(staged, tmp_path, expected_rows=3, drop_warning_percent=0)
+    assert not result.warning_drop
