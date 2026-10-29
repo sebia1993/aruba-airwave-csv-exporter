@@ -1,4 +1,3 @@
-from collections import defaultdict
 
 from airwave_csv.multi_config import MultiConfig, add_server
 from airwave_csv.orchestrator import run_batch
@@ -16,7 +15,8 @@ class FakeHandle:
         self.launcher,self.sid,self.attempt,self.fail=launcher,sid,attempt,fail
         self.done=False
     def poll(self):
-        if self.done: return None
+        if self.done:
+            return None
         self.done=True
         self.launcher.running-=1
         return WorkerResult("run-1",self.sid,self.attempt,

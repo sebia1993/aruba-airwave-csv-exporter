@@ -118,7 +118,7 @@ def collect_attempt(
         return RunResult(exc.code, "failed", str(exc), None, exc.code in (47, 48))
     except CsvValidationError as exc:
         return RunResult(52, "failed", str(exc), None, True)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError):
         return RunResult(40, "failed", "CSV 수집 경로 또는 설정에 오류가 있습니다.", None, False)
     finally:
         staged.unlink(missing_ok=True)

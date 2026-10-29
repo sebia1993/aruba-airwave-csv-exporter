@@ -6,11 +6,10 @@ import heapq
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import app_home
-from .lock import AlreadyRunning, single_instance
+from .lock import single_instance
 from .process_control import WorkerLauncher
 from .run_snapshot import BatchSnapshot, WorkerResult, write_snapshot
 
@@ -36,7 +35,6 @@ def run_batch(
     home = home or app_home()
     start = clock.monotonic()
     cfg = snapshot.settings
-    all_servers = {s.id: s for s in snapshot.servers}
     pending = deque(s.id for s in snapshot.servers if s.enabled)
     skipped = len(snapshot.servers) - len(pending)
     if not pending:
