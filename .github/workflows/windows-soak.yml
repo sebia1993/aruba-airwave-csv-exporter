@@ -1,0 +1,42 @@
+name: Windows worker process soak (on demand)
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Soak duration in minutes; mock AirWave only"
+        required: true
+        type: choice
+        default: "5"
+        options:
+          - "5"
+          - "30"
+          - "120"
+          - "240"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-long-soak:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install synthetic worker test dependencies
+        run: python -m pip install ".[test]"
+      - name: Long Windows real-worker process test (no AirWave credentials)
+        shell: pwsh
+        run: |
+          python tests/support/soak_process_pool.py --minutes "${{ inputs.minutes }}" --servers 5 --report test-results/worker-soak-long.json
+      - name: Upload resource / process leak report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirWaveWorkerSoak-Long
+          path: test-results/worker-soak-long.json
+          if-no-files-found: warn
+          retention-days: 30
