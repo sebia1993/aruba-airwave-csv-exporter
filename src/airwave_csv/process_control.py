@@ -112,6 +112,8 @@ if os.name == "nt":
     k32.CloseHandle.restype = wintypes.BOOL
     k32.TerminateProcess.argtypes = [HANDLE, wintypes.UINT]
     k32.TerminateProcess.restype = wintypes.BOOL
+    k32.WaitForSingleObject.argtypes = [HANDLE, DWORD]
+    k32.WaitForSingleObject.restype = DWORD
 
     class _WindowsJobProcess:
         def __init__(self, argv: list[str]):
@@ -166,12 +168,18 @@ if os.name == "nt":
                 return
             self.closed = True
             if self.job:
-                k32.CloseHandle(self.job)
+                k32.CloseHandle(self.job)  # KILL_ON_JOB_CLOSE 종료 요청
                 self.job = None
             if self.process:
-                k32.TerminateProcess(self.process, 1)
-                k32.CloseHandle(self.process)
+                process = self.process
                 self.process = None
+                try:
+                    result = k32.WaitForSingleObject(process, 5000)
+                    if result != 0:  # WAIT_OBJECT_0
+                        k32.TerminateProcess(process, 1)
+                        k32.WaitForSingleObject(process, 2000)
+                finally:
+                    k32.CloseHandle(process)
 
         def close(self) -> None:
             if self.closed:
