@@ -18,12 +18,12 @@ def test_register_daily_passes_execution_path_without_shell_interpolation(monkey
     monkeypatch.setattr(scheduler, "_powershell", fake_ps)
     monkeypatch.setattr(
         scheduler, "executable_action",
-        lambda: (tmp_path / "Application Folder" / "AirWaveCsvExporter.exe", "--run --headless"),
+        lambda: (tmp_path / "Application Folder" / "AirWaveCsvExporter.exe", "--run-all --headless"),
     )
     scheduler.register_daily("09:05")
     script, env = calls[0]
     assert env["AW_TIME"] == "09:05"
-    assert env["AW_ARGS"] == "--run --headless"
+    assert env["AW_ARGS"] == "--run-all --headless"
     assert "Application Folder" in env["AW_EXEC"]
     assert "New-ScheduledTaskPrincipal" in script
     assert "Interactive" in script

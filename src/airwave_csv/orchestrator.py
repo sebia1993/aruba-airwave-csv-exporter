@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .config import app_home
 from .events import (clear_batch_active, mark_batch_active, record_server_event,
-                     reconcile_interrupted_batch, write_batch_summary)
+                     reconcile_interrupted_batch, write_batch_progress,
+                     write_batch_summary)
 from .lock import single_instance
 from .process_control import WorkerLauncher
 from .run_snapshot import BatchSnapshot, WorkerResult, write_snapshot
@@ -53,6 +54,7 @@ def run_batch(
     launcher = launcher or WorkerLauncher(snapshot.run_id)
 
     with single_instance(home / "state" / "run.lock"):
+        last_progress = None
         reconcile_interrupted_batch(home)
         snapshot_path = write_snapshot(home, snapshot)
         mark_batch_active(home, snapshot.run_id)
@@ -128,6 +130,14 @@ def run_batch(
                             result.status if result.status in ("SUCCESS", "WARNING")
                             else "FAILED"
                         )
+                statuses = {s.id: ("SKIPPED" if not s.enabled else "QUEUED")
+                            for s in snapshot.servers}
+                statuses.update({sid: "RETRY_WAIT" for _, _, sid, _ in retry_heap})
+                statuses.update({sid: "RUNNING" for sid in active})
+                statuses.update(terminal)
+                if statuses != last_progress:
+                    write_batch_progress(home, snapshot.run_id, statuses)
+                    last_progress = statuses
                 if not progress and (active or pending or retry_heap):
                     delay = 0.2
                     if not active and not pending and retry_heap:

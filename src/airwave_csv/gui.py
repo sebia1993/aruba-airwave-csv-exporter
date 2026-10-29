@@ -18,7 +18,7 @@ from .migration import migrate_if_needed
 from .multi_config import (
     add_server, registry_path, save_v2, validate_settings,
 )
-from .paths import server_export_dir, server_selectors_path
+from .paths import server_selectors_path
 from .scheduler import ScheduleError, register_daily, task_status, unregister_daily
 
 
@@ -30,7 +30,7 @@ class ExporterWindow(tk.Tk):
         self.minsize(800, 610)
         try:
             self.settings = migrate_if_needed(app_home())
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError):
             messagebox.showerror("설정 오류", "기존 설정을 읽을 수 없습니다. 오류를 수정하세요.")
             self.destroy()
             return
@@ -145,7 +145,7 @@ class ExporterWindow(tk.Tk):
         self.enabled_var.set(profile.enabled)
 
     def reset_form(self):
-        self.table.selection_remove(self.table.selection())
+        self.table.selection_remove(*self.table.selection())
         for v in (self.name_var, self.url_var, self.user_var, self.pass_var):
             v.set("")
         self.enabled_var.set(True)
@@ -181,7 +181,7 @@ class ExporterWindow(tk.Tk):
                 if not self.save():
                     raise ValueError("설정 저장에 실패했습니다.")
             except Exception:
-                self.settings.servers.remove(profile) if profile in self.settings.servers else None
+                self.settings.servers = [s for s in self.settings.servers if s.id != profile.id]
                 raise
             self.pass_var.set("")
             self.refresh()
@@ -196,8 +196,7 @@ class ExporterWindow(tk.Tk):
             messagebox.showwarning("선택", "수정할 서버를 먼저 선택하세요.")
             return
         try:
-            previous = server
-            changed = change_server(
+            change_server(
                 self.settings, server.id, name=self.name_var.get(), url=self.url_var.get(),
                 username=self.user_var.get()
             )

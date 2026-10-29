@@ -85,3 +85,9 @@ def reconcile_interrupted_batch(home: Path) -> None:
         except (OSError, json.JSONDecodeError):
             pass
         clear_batch_active(home)
+
+
+def write_batch_progress(home: Path, run_id: str, statuses: dict[str, str]) -> None:
+    _write_json_atomic(
+        home / "state" / "progress.json", {"run_id": run_id, "servers": statuses}
+    )
