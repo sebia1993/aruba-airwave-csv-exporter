@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from dataclasses import replace
 import sys
 import time
 import tkinter as tk
@@ -46,6 +47,7 @@ class ExporterWindow(tk.Tk):
         self.status_var = tk.StringVar(value="서버를 선택하거나 추가하세요.")
         self._last_schedule_check: float | None = None
         self._cached_schedule_status = "확인 전"
+        self._refresh_timer_id = None
         self._build()
         self.refresh()
 
@@ -158,34 +160,53 @@ class ExporterWindow(tk.Tk):
         if directory:
             self.dir_var.set(directory)
 
-    def save(self) -> bool:
+    def save(self, candidate=None, *, credential=None) -> bool:
+        """설정 유효성을 검사한 후보만 커밋하며 실패한 후보는 버립니다."""
         try:
-            self.settings.schedule_time = self.time_var.get().strip()
-            self.settings.parallel_limit = int(self.parallel_var.get())
-            self.settings.export_root = self.dir_var.get().strip()
-            validate_settings(self.settings)
-            save_v2(self.settings, registry_path(app_home()))
+            proposal = candidate if candidate is not None else replace(
+                self.settings, servers=list(self.settings.servers)
+            )
+            proposal.schedule_time = self.time_var.get().strip()
+            proposal.parallel_limit = int(self.parallel_var.get())
+            proposal.export_root = self.dir_var.get().strip()
+            validate_settings(proposal)
+            path = registry_path(app_home())
+            previous = path.read_bytes() if path.exists() else None
+            save_v2(proposal, path)
+            try:
+                if credential is not None:
+                    server_id, password = credential
+                    CredentialStore.set_for_server(server_id, password)
+            except CredentialError:
+                # 비밀번호 저장 실패 시 이전 서버 설정을 원자적으로 복원합니다.
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    rollback = path.with_suffix(".rollback.part")
+                    try:
+                        rollback.write_bytes(previous)
+                        os.replace(rollback, path)
+                    finally:
+                        rollback.unlink(missing_ok=True)
+                raise
+            self.settings = proposal
             self.status_var.set("설정을 저장했습니다.")
             return True
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, CredentialError) as exc:
             messagebox.showerror("설정 저장 실패", str(exc))
             return False
 
     def add(self):
         try:
-            if not self.pass_var.get():
+            password = self.pass_var.get()
+            if not password:
                 raise ValueError("새 서버의 비밀번호를 입력하세요.")
-            profile = add_server(self.settings, name=self.name_var.get(),
+            proposal = replace(self.settings, servers=list(self.settings.servers))
+            profile = add_server(proposal, name=self.name_var.get(),
                                  url=self.url_var.get(), username=self.user_var.get())
-            try:
-                CredentialStore.set_for_server(profile.id, self.pass_var.get())
-                from dataclasses import replace
-                self.settings.servers[-1] = replace(profile, enabled=self.enabled_var.get())
-                if not self.save():
-                    raise ValueError("설정 저장에 실패했습니다.")
-            except Exception:
-                self.settings.servers = [s for s in self.settings.servers if s.id != profile.id]
-                raise
+            proposal.servers[-1] = replace(profile, enabled=self.enabled_var.get())
+            if not self.save(proposal, credential=(profile.id, password)):
+                return
             self.pass_var.set("")
             self.refresh()
             self.table.selection_set(profile.id)
@@ -199,31 +220,34 @@ class ExporterWindow(tk.Tk):
             messagebox.showwarning("선택", "수정할 서버를 먼저 선택하세요.")
             return
         try:
+            proposal = replace(self.settings, servers=list(self.settings.servers))
             change_server(
-                self.settings, server.id, name=self.name_var.get(), url=self.url_var.get(),
+                proposal, server.id, name=self.name_var.get(), url=self.url_var.get(),
                 username=self.user_var.get()
             )
-            set_enabled(self.settings, server.id, self.enabled_var.get())
-            if self.pass_var.get():
-                CredentialStore.set_for_server(server.id, self.pass_var.get())
-            if not self.save():
-                raise ValueError("설정 저장에 실패했습니다.")
+            set_enabled(proposal, server.id, self.enabled_var.get())
+            password = self.pass_var.get()
+            credential = (server.id, password) if password else None
+            if not self.save(proposal, credential=credential):
+                return
             self.pass_var.set("")
             self.refresh()
-            self.table.selection_set(server.id)
+            # 이미 선택된 행을 다시 선택하지 않아 입력 중 이벤트를 발생시키지 않습니다.
         except (ValueError, CredentialError) as exc:
             messagebox.showerror("수정 실패", str(exc))
 
     def delete(self):
-        sid=self._selected_id()
+        sid = self._selected_id()
         if not sid:
             return
         if not messagebox.askyesno(
             "서버 삭제", "서버 등록을 삭제하겠습니까?\n기존 CSV 파일은 삭제되지 않습니다."
         ):
             return
-        remove_server(self.settings, sid)
-        self.save()
+        proposal = replace(self.settings, servers=list(self.settings.servers))
+        remove_server(proposal, sid)
+        if not self.save(proposal):
+            return
         self.reset_form()
         self.refresh()
 
@@ -300,18 +324,22 @@ class ExporterWindow(tk.Tk):
                     progress=p.get("servers",{})
             except (OSError, ValueError, KeyError):
                 pass
-        selection=self._selected_id()
+        # 기존 행은 선택/입력 이벤트를 발생시키지 않도록 값만 변경합니다.
+        known = {s.id for s in self.settings.servers}
         for item in self.table.get_children():
-            self.table.delete(item)
+            if item not in known:
+                self.table.delete(item)
         for s in self.settings.servers:
-            result=per.get(s.id,{})
-            state_text=progress.get(s.id) or result.get("status","준비")
-            self.table.insert("", "end", iid=s.id,text=s.id,values=(
+            result = per.get(s.id, {})
+            state_text = progress.get(s.id) or result.get("status", "준비")
+            values = (
                 s.display_name, "사용" if s.enabled else "제외",
-                state_text, result.get("rows","-"),result.get("filename","-"),
-            ))
-        if selection and self.table.exists(selection):
-            self.table.selection_set(selection)
+                state_text, result.get("rows", "-"), result.get("filename", "-"),
+            )
+            if self.table.exists(s.id):
+                self.table.item(s.id, values=values)
+            else:
+                self.table.insert("", "end", iid=s.id, text=s.id, values=values)
         now = time.monotonic()
         if schedule_check_due(now=now, last=self._last_schedule_check):
             self._last_schedule_check = now
@@ -322,7 +350,12 @@ class ExporterWindow(tk.Tk):
         self.status_var.set(
             f"등록 서버 {len(self.settings.servers)}/5 · 예약: {self._cached_schedule_status}"
         )
-        self.after(2000,self.refresh)
+        if getattr(self, "_refresh_timer_id", None) is None:
+            self._refresh_timer_id = self.after(2000, self._timed_refresh)
+
+    def _timed_refresh(self):
+        self._refresh_timer_id = None
+        self.refresh()
 
 
 def launch():
