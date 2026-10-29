@@ -41,10 +41,12 @@ def run_batch(
     pending = deque(s.id for s in snapshot.servers if s.enabled)
     skipped = len(snapshot.servers) - len(pending)
     if not pending:
-        summary = BatchSummary(snapshot.run_id, len(snapshot.servers), 0, 0, 0,
-                               skipped, 0, 3, 0.0)
-        write_batch_summary(home, summary, {})
-        return summary
+        # 빈 배치도 다른 예약 작업의 결과를 덮지 않도록 동일 잠금을 사용합니다.
+        with single_instance(home / "state" / "run.lock"):
+            summary = BatchSummary(snapshot.run_id, len(snapshot.servers), 0, 0, 0,
+                                   skipped, 0, 3, 0.0)
+            write_batch_summary(home, summary, {})
+            return summary
     retry_heap: list[tuple[float, int, str, int]] = []
     sequence = 0
     active: dict[str, tuple[object, int]] = {}
@@ -147,23 +149,23 @@ def run_batch(
             for handle, _ in active.values():
                 handle.terminate()
 
-    good = sum(v == "SUCCESS" for v in terminal.values())
-    warn = sum(v == "WARNING" for v in terminal.values())
-    failed = sum(v == "FAILED" for v in terminal.values())
-    interrupted = sum(v == "INTERRUPTED" for v in terminal.values())
-    count = good + warn + failed + interrupted
-    code = 0 if good == count else (1 if not good and not warn else 2)
-    summary = BatchSummary(
-        snapshot.run_id, len(snapshot.servers), good, warn, failed,
-        skipped, interrupted, code, round(clock.monotonic() - start, 2),
-    )
-    for sid, status in terminal.items():
-        if sid not in results or results[sid].status != status:
-            results[sid] = WorkerResult(
-                snapshot.run_id, sid, 0, status, 98, False,
-            )
-    for sid in (s.id for s in snapshot.servers if not s.enabled):
-        results[sid] = WorkerResult(snapshot.run_id, sid, 0, "SKIPPED", 0, False)
-    write_batch_summary(home, summary, results)
-    clear_batch_active(home)
-    return summary
+        good = sum(v == "SUCCESS" for v in terminal.values())
+        warn = sum(v == "WARNING" for v in terminal.values())
+        failed = sum(v == "FAILED" for v in terminal.values())
+        interrupted = sum(v == "INTERRUPTED" for v in terminal.values())
+        count = good + warn + failed + interrupted
+        code = 0 if good == count else (1 if not good and not warn else 2)
+        summary = BatchSummary(
+            snapshot.run_id, len(snapshot.servers), good, warn, failed,
+            skipped, interrupted, code, round(clock.monotonic() - start, 2),
+        )
+        for sid, status in terminal.items():
+            if sid not in results or results[sid].status != status:
+                results[sid] = WorkerResult(
+                    snapshot.run_id, sid, 0, status, 98, False,
+                )
+        for sid in (s.id for s in snapshot.servers if not s.enabled):
+            results[sid] = WorkerResult(snapshot.run_id, sid, 0, "SKIPPED", 0, False)
+        write_batch_summary(home, summary, results)
+        clear_batch_active(home)
+        return summary
