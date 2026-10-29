@@ -14,3 +14,16 @@ selectors.json
 *.zip
 .idea/
 .vscode/
+
+# AirWave 다중 서버 로컬 운영 정보 (GitHub 업로드 금지)
+multi_config.json
+config.v1.backup.json
+/selectors/
+/state/
+/runs/
+/logs/
+*.jsonl
+
+# Superpowers 로컬 실행 작업 공간
+.superpowers/
+.worktrees/
