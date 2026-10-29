@@ -27,3 +27,5 @@ config.v1.backup.json
 # Superpowers 로컬 실행 작업 공간
 .superpowers/
 .worktrees/
+# Test-only resource / soak reports (never Git tracked)
+/test-results/

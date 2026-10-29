@@ -34,6 +34,22 @@ jobs:
         run: |
           $process = Start-Process -FilePath 'dist/AirWaveCsvExporter/AirWaveCsvExporter.exe' -ArgumentList '--help' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw 'EXE startup failed' }
+      - name: Validate frozen EXE 3/5 real worker processes (fail closed)
+        shell: pwsh
+        run: |
+          python tests/support/frozen_worker_smoke.py --exe dist/AirWaveCsvExporter/AirWaveCsvExporter.exe
+      - name: Two-minute Windows OS-worker soak
+        shell: pwsh
+        run: |
+          python tests/support/soak_process_pool.py --minutes 2 --servers 5 --report test-results/worker-soak-short.json
+      - name: Upload synthetic worker soak metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirWaveWorkerSoak-Short
+          path: test-results/worker-soak-short.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload Windows EXE (folder must remain intact)
         uses: actions/upload-artifact@v4
         with:

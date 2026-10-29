@@ -81,6 +81,32 @@
 
 실제 AirWave 웹 DOM/인증 및 CSV 완전성은 CI 모의 테스트와 별개의 현장 인수 항목입니다.
 
+## 추가 안정성 검증 (운영 기능 변경 없음)
+
+현재 자동 검증은 다음 세 범위를 **별도로** 검사합니다.
+
+- `tests/test_playwright_mock_ui.py`: Edge에서 미리 정의된 모의 AirWave HTML/CSV 다운로드 검증
+- `tests/test_process_pool_integration.py`: 실제 Windows/Linux 운영체제 자식 프로세스로 기존 `run_batch` / `WorkerLauncher`의 3대·5대 병렬 실행, 3개 동시 제한, FIFO, 모의 CSV 분리, 실패 및 재시도 검증. 테스트 전용 워커만 사용하며 AirWave 접속은 없음
+- `tests/support/frozen_worker_smoke.py`: 빌드된 **실제 Windows EXE** 워커 3대/5대의 시작·종료와 CSS 미확인 시 코드 44 안전 실패 확인. 이 경로는 실제 CSV 다운로드 성공을 증명하지 않음
+
+모든 GitHub Actions Windows 빌드에서 **2분 반복 워커 소크(soak) 테스트**와 JSON 자원 사용 보고서를 생성합니다.
+[Actions](https://github.com/sebia1993/aruba-airwave-csv-exporter/actions)에서 해당 실행의 **AirWaveWorkerSoak-Short** 아티팩트를 받으면 반복 회수, 메모리 증가, 프로세스 핸들, 누수로 남은 PID 여부를 확인할 수 있습니다.
+
+보다 긴 검증은 GitHub Actions의 **Windows worker process soak (on demand)** 워크플로를 수동 실행하여 5/30/120/240분 중 선택합니다.
+결과는 `AirWaveWorkerSoak-Long` 아티팩트로 제공됩니다. 이 워크플로를 실제로 실행하기 전에는 장시간 검증을 완료한 것이 아닙니다.
+
+개발용 Windows PC에서 연속 **8시간(480분)** 검증하려면 별도 Python 테스트 환경에서 다음 명령을 사용합니다. 이 테스트는 실제 AirWave·자격 증명을 사용하지 않습니다.
+
+```powershell
+python -m pip install ".[test]"
+python tests/support/soak_process_pool.py --minutes 480 --servers 5 --report test-results/soak-8hours.json
+```
+
+장시간 테스트의 메모리·핸들 증가 임계값은 모의 테스트 프로세스의 자원 누수 검사이며, 실제 AirWave 서버의 성능 영향이나 운영용 Edge 메모리 사용량을 측정하지 않습니다.
+운영용 EXE에는 Python 설치가 필요하지 않지만 **위 개발자용 로컬 검증 명령에는 Python이 필요합니다**.
+
+
+
 설계/작업계획:
 - docs/superpowers/specs/2026-10-29-multi-airwave-export-design.md
 - docs/superpowers/plans/2026-10-29-multi-airwave-export-implementation.md
