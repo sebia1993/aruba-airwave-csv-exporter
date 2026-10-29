@@ -33,3 +33,11 @@ def test_remove_keeps_next_server_number():
     remove_server(cfg,one.id)
     assert len(cfg.servers)==1
     assert cfg.next_server_number==3
+
+
+
+def test_task_scheduler_poll_is_throttled():
+    from airwave_csv.gui_model import schedule_check_due
+    assert schedule_check_due(now=100, last=0)
+    assert not schedule_check_due(now=125, last=100)
+    assert schedule_check_due(now=160, last=100)
