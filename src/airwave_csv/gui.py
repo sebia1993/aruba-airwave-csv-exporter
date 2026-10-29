@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import threading
 import subprocess
 from dataclasses import replace
@@ -13,6 +14,7 @@ import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from uuid import uuid4
 
 from .config import SELECTOR_TEMPLATE, app_home
 from .credentials import CredentialError, CredentialStore
@@ -176,24 +178,32 @@ class ExporterWindow(tk.Tk):
             proposal.export_root = self.dir_var.get().strip()
             validate_settings(proposal)
             path = registry_path(app_home())
-            previous = path.read_bytes() if path.exists() else None
-            save_v2(proposal, path)
+            backup = path.with_name(f".{path.name}.{uuid4().hex}.part")
+            had_previous = path.exists()
+            # 원본 백업을 먼저 확보하므로 디스크 부족이면 설정을 변경하지 않습니다.
+            if had_previous:
+                shutil.copyfile(path, backup)
+            preserve_backup = False
             try:
-                if credential is not None:
-                    server_id, password = credential
-                    CredentialStore.set_for_server(server_id, password)
-            except CredentialError:
-                # 비밀번호 저장 실패 시 이전 서버 설정을 원자적으로 복원합니다.
-                if previous is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    rollback = path.with_suffix(".rollback.part")
-                    try:
-                        rollback.write_bytes(previous)
-                        os.replace(rollback, path)
-                    finally:
-                        rollback.unlink(missing_ok=True)
-                raise
+                save_v2(proposal, path)
+                try:
+                    if credential is not None:
+                        server_id, password = credential
+                        CredentialStore.set_for_server(server_id, password)
+                except CredentialError:
+                    # 저장 공간 추가 할당 없이 이전 정상 설정으로 되돌립니다.
+                    if had_previous:
+                        try:
+                            os.replace(backup, path)
+                        except OSError:
+                            preserve_backup = True  # 원본 백업을 남깁니다.
+                            raise
+                    else:
+                        path.unlink(missing_ok=True)
+                    raise
+            finally:
+                if not preserve_backup:
+                    backup.unlink(missing_ok=True)
             self.settings = proposal
             self.status_var.set("설정을 저장했습니다.")
             return True
@@ -320,6 +330,8 @@ class ExporterWindow(tk.Tk):
     def refresh(self):
         state=read_last_batch(app_home())
         per=state.get("servers",{})
+        if not isinstance(per, dict):
+            per = {}
         progress = {}
         progress_file = app_home() / "state" / "progress.json"
         active = app_home() / "state" / "active_batch.json"
@@ -328,7 +340,9 @@ class ExporterWindow(tk.Tk):
                 run_id=json.loads(active.read_text(encoding="utf-8"))["run_id"]
                 p=json.loads(progress_file.read_text(encoding="utf-8"))
                 if p.get("run_id")==run_id:
-                    progress=p.get("servers",{})
+                    candidate_progress = p.get("servers", {})
+                    if isinstance(candidate_progress, dict):
+                        progress = candidate_progress
             except (OSError, ValueError, KeyError):
                 pass
         # 기존 행은 선택/입력 이벤트를 발생시키지 않도록 값만 변경합니다.
@@ -338,6 +352,8 @@ class ExporterWindow(tk.Tk):
                 self.table.delete(item)
         for s in self.settings.servers:
             result = per.get(s.id, {})
+            if not isinstance(result, dict):
+                result = {}
             state_text = progress.get(s.id) or result.get("status", "준비")
             values = (
                 s.display_name, "사용" if s.enabled else "제외",
@@ -377,7 +393,7 @@ class ExporterWindow(tk.Tk):
         # 별도 스레드에서는 Tk 위젯을 절대 갱신하지 않습니다.
         try:
             result = task_status()
-        except (ScheduleError, OSError):
+        except Exception:  # 스레드 예외가 예약 상태 갱신을 영구 중단시키면 안 됩니다.
             result = "확인 불가"
         self._schedule_status_results.put(result)
 
