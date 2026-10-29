@@ -81,3 +81,25 @@ def test_unexpected_scheduler_thread_error_does_not_disable_future_checks(
     w.refresh()
     assert w._cached_schedule_status == "확인 불가"
     assert w._schedule_status_inflight is False
+
+
+def test_non_object_progress_json_does_not_crash_gui_refresh(tmp_path, monkeypatch):
+    w, _ = make_window(tmp_path, monkeypatch)
+    events.mark_batch_active(tmp_path, "active-run")
+    (tmp_path / "state" / "progress.json").write_text("[]", encoding="utf-8")
+    w.refresh()
+    assert w.table.exists("airwave-01")
+
+
+def test_interrupted_run_recovers_when_progress_json_shape_is_invalid(tmp_path):
+    import json
+
+    events.mark_batch_active(tmp_path, "interrupted-run")
+    (tmp_path / "state" / "progress.json").write_text("[]", encoding="utf-8")
+    snapshot_file = tmp_path / "runs" / "interrupted-run" / "snapshot.json"
+    snapshot_file.parent.mkdir(parents=True)
+    snapshot_file.write_text(
+        json.dumps({"servers": [{"id": "airwave-01"}]}), encoding="utf-8"
+    )
+    assert events.reconcile_if_idle(tmp_path) is True
+    assert events.read_last_batch(tmp_path)["servers"]["airwave-01"]["status"] == "INTERRUPTED"
