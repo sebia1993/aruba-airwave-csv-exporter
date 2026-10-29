@@ -72,6 +72,7 @@ def run_soak(
     attempts = 0
     peak_active = 0
     failed_batches = 0
+    last_batch_diagnostics = {}
     observed_growth_mb = 0.0
     observed_handle_growth = 0
     first_sample: tuple[int, int] | None = None
@@ -88,13 +89,27 @@ def run_soak(
                 count += 1
                 attempts += result.completed_count
                 peak_active = max(peak_active, result.max_concurrent)
+                last_batch_diagnostics = {
+                    "success": result.summary.success,
+                    "failed": result.summary.failed,
+                    "warning": result.summary.warning,
+                    "interrupted": result.summary.interrupted,
+                    "exit_code": result.summary.exit_code,
+                    "completed_workers": result.completed_count,
+                    "max_concurrent": result.max_concurrent,
+                    "marker_removed": result.active_marker_removed,
+                    "started_count": len(result.started_order),
+                }
                 if (result.summary.success != servers or result.summary.failed != 0
                         or result.summary.exit_code != 0
                         or result.completed_count != servers
                         or result.max_concurrent > 3
                         or not result.active_marker_removed):
                     failed_batches += 1
-                    raise AssertionError("worker process batch integrity failed")
+                    raise AssertionError(
+                        "worker process batch integrity failed: "
+                        + json.dumps(last_batch_diagnostics)
+                    )
                 for number in range(1, servers + 1):
                     sid = f"airwave-{number:02}"
                     path = result.export_root / sid / "latest.csv"
@@ -137,6 +152,7 @@ def run_soak(
             "servers_per_batch": servers,
             "worker_attempts": attempts,
             "failed_batches": failed_batches,
+            "last_batch": last_batch_diagnostics,
             "max_concurrent": peak_active,
             "elapsed_seconds": round(time.monotonic() - started_at, 2),
             "initial_rss_mb": round(initial_rss / (1024 * 1024), 2),
