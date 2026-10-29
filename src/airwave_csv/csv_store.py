@@ -88,7 +88,9 @@ def store_export(
             raise CsvValidationError("기존 latest.csv가 손상되어 갱신을 중단했습니다.") from None
     warning = bool(
         previous and previous.rows > 0
-        and current.rows < previous.rows * (1 - drop_warning_percent / 100)
+        and current.rows < previous.rows
+        and (previous.rows - current.rows) * 100
+        >= previous.rows * drop_warning_percent
     )
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     final = destination / ("AirWave_Devices_" + stamp + ".csv")
