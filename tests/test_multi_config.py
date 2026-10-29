@@ -71,7 +71,7 @@ def test_per_server_readiness_isolated_from_global_structure():
     cfg = configured()
     good = add_server(cfg, name="B", url="https://good.example.invalid", username="ops")
     cfg.servers.insert(0, ServerProfile(
-        id="airwave-90", display_name="A", server_url="invalid", username=""
+        id="airwave-00", display_name="A", server_url="invalid", username=""
     ))
     validate_settings(cfg)
     with pytest.raises(ValueError):
