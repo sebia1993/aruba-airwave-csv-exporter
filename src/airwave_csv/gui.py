@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
 import subprocess
 from dataclasses import replace
 import sys
@@ -14,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .config import SELECTOR_TEMPLATE, app_home
 from .credentials import CredentialError, CredentialStore
-from .events import read_last_batch
+from .events import read_last_batch, reconcile_if_idle
 from .gui_model import change_server, remove_server, schedule_check_due, set_enabled
 from .migration import migrate_if_needed
 from .multi_config import (
@@ -36,6 +38,7 @@ class ExporterWindow(tk.Tk):
             messagebox.showerror("설정 오류", "기존 설정을 읽을 수 없습니다. 오류를 수정하세요.")
             self.destroy()
             return
+        reconcile_if_idle(app_home())
         self.time_var = tk.StringVar(value=self.settings.schedule_time)
         self.parallel_var = tk.StringVar(value=str(self.settings.parallel_limit))
         self.dir_var = tk.StringVar(value=self.settings.export_root)
@@ -47,6 +50,8 @@ class ExporterWindow(tk.Tk):
         self.status_var = tk.StringVar(value="서버를 선택하거나 추가하세요.")
         self._last_schedule_check: float | None = None
         self._cached_schedule_status = "확인 전"
+        self._schedule_status_results = queue.SimpleQueue()
+        self._schedule_status_inflight = False
         self._refresh_timer_id = None
         self._build()
         self.refresh()
@@ -292,6 +297,7 @@ class ExporterWindow(tk.Tk):
             return
         try:
             register_daily(self.settings.schedule_time)
+            self._last_schedule_check = None
             messagebox.showinfo("예약 완료", "하루 1회 전체 서버 수집이 등록되었습니다.")
             self.refresh()
         except ScheduleError as exc:
@@ -300,6 +306,7 @@ class ExporterWindow(tk.Tk):
     def unregister(self):
         try:
             unregister_daily()
+            self._last_schedule_check = None
             self.refresh()
         except ScheduleError as exc:
             messagebox.showerror("해제 실패", str(exc))
@@ -340,13 +347,22 @@ class ExporterWindow(tk.Tk):
                 self.table.item(s.id, values=values)
             else:
                 self.table.insert("", "end", iid=s.id, text=s.id, values=values)
-        now = time.monotonic()
-        if schedule_check_due(now=now, last=self._last_schedule_check):
-            self._last_schedule_check = now
+        results = self.__dict__.get("_schedule_status_results")
+        if results is None:
+            results = queue.SimpleQueue()
+            self._schedule_status_results = results
+        while True:
             try:
-                self._cached_schedule_status = task_status()
-            except ScheduleError:
-                self._cached_schedule_status = "확인 불가"
+                self._cached_schedule_status = results.get_nowait()
+                self._schedule_status_inflight = False
+            except queue.Empty:
+                break
+        now = time.monotonic()
+        if (not self.__dict__.get("_schedule_status_inflight", False)
+                and schedule_check_due(now=now, last=self._last_schedule_check)):
+            self._last_schedule_check = now
+            self._schedule_status_inflight = True
+            threading.Thread(target=self._query_schedule_status, daemon=True).start()
         self.status_var.set(
             f"등록 서버 {len(self.settings.servers)}/5 · 예약: {self._cached_schedule_status}"
         )
@@ -356,6 +372,14 @@ class ExporterWindow(tk.Tk):
     def _timed_refresh(self):
         self._refresh_timer_id = None
         self.refresh()
+
+    def _query_schedule_status(self):
+        # 별도 스레드에서는 Tk 위젯을 절대 갱신하지 않습니다.
+        try:
+            result = task_status()
+        except (ScheduleError, OSError):
+            result = "확인 불가"
+        self._schedule_status_results.put(result)
 
 
 def launch():
