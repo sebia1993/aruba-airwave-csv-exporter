@@ -1,7 +1,6 @@
 """윈도우 워커와 그 자식 프로세스가 함께 정리되는지 확인합니다."""
 
 import os
-from pathlib import Path
 import sys
 import time
 
@@ -32,6 +31,10 @@ def test_job_close_terminates_worker_and_descendant(tmp_path):
     finally:
         job.terminate()
     time.sleep(0.5)
+    ctypes.windll.kernel32.OpenProcess.argtypes = [
+        wintypes.DWORD, wintypes.BOOL, wintypes.DWORD
+    ]
+    ctypes.windll.kernel32.OpenProcess.restype = wintypes.HANDLE
     handle=ctypes.windll.kernel32.OpenProcess(0x1000,False,child_pid)
     if handle:
         code=wintypes.DWORD()
