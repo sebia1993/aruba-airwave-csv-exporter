@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     sleep_s = float(os.environ.get("AW_SYNTHETIC_DELAY_SECONDS", "0.6"))
     fail_always = os.environ.get("AW_SYNTHETIC_FAIL_ALWAYS")
     fail_once = os.environ.get("AW_SYNTHETIC_FAIL_ONCE")
+    crash_server = os.environ.get("AW_SYNTHETIC_CRASH_SERVER")
+    corrupt_result = os.environ.get("AW_SYNTHETIC_BAD_RESULT_SERVER")
+    corrupt_csv = os.environ.get("AW_SYNTHETIC_BAD_CSV_SERVER")
+    write_failure = os.environ.get("AW_SYNTHETIC_WRITE_FAILURE_SERVER")
     status = "SUCCESS"
     code = 0
     retryable = False
@@ -41,7 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     staged = None
     try:
         time.sleep(sleep_s)
-        if args.server_id == fail_always:
+        if args.server_id == crash_server:
+            # 실제 OS 비정상 종료. 결과 JSON과 타임라인은 남기지 않습니다.
+            os._exit(78)
+        if args.server_id == corrupt_result:
+            status, code, retryable = "FAILED", 98, False
+        elif args.server_id == write_failure:
+            raise OSError("test-only simulated disk write failure")
+        elif args.server_id == fail_always:
             status, code, retryable = "FAILED", 31, False
         elif args.server_id == fail_once and args.attempt == 1:
             status, code, retryable = "FAILED", 48, True
@@ -49,9 +60,12 @@ def main(argv: list[str] | None = None) -> int:
             folder = server_export_dir(snapshot.settings, args.server_id)
             folder.mkdir(parents=True, exist_ok=True)
             staged = folder / (".synthetic-" + uuid4().hex + ".part")
-            staged.write_text(
-                "Name,Model\n" + args.server_id + ",AP-535\n", encoding="utf-8"
-            )
+            if args.server_id == corrupt_csv:
+                staged.write_text("Name,Model\nbroken-row\n", encoding="utf-8")
+            else:
+                staged.write_text(
+                    "Name,Model\n" + args.server_id + ",AP-535\n", encoding="utf-8"
+                )
             export = store_export(staged, folder, expected_rows=1)
             rows, filename = export.rows, export.path.name
     except Exception as exc:
@@ -72,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
         "status": status,
         "error_type": error_type,
     }), encoding="utf-8")
+    if args.server_id == corrupt_result:
+        # 프로세스가 종료 코드 0을 반환해도 유효하지 않은 결과는 실패여야 합니다.
+        args.result.parent.mkdir(parents=True, exist_ok=True)
+        args.result.write_text("{broken-json", encoding="utf-8")
+        return 0
     write_worker_result(args.result, WorkerResult(
         snapshot.run_id, args.server_id, args.attempt,
         status, code, retryable, rows, filename

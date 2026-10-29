@@ -1,0 +1,31 @@
+# Reproduce a known-green Python 3.12 GitHub Actions build (2026-10-29).
+# CI only: do NOT use this file to change production package requirements.
+# Version observations: successful Windows/Linux run #40845239918.
+# Requirements are pinned, but platform wheels and GitHub Actions are not hash-locked.
+altgraph==0.17.5
+cffi==2.1.1
+cryptography==50.0.2
+greenlet==3.5.6
+iniconfig==2.3.1
+jaraco.classes==3.4.0
+jaraco.context==6.1.2
+jaraco.functools==4.6.0
+jeepney==0.9.0
+keyring==25.7.0
+more-itertools==11.2.1
+packaging==26.3
+pefile==2024.8.26
+playwright==1.64.1
+pluggy==1.7.0
+psutil==7.2.2
+pycparser==3.12
+pyee==14.0.0
+pygments==2.21.0
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+pytest==9.2.0
+pywin32-ctypes==0.2.3
+ruff==0.17.3
+SecretStorage==3.5.0
+setuptools==84.2.1
+typing-extensions==4.16.0

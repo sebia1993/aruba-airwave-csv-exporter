@@ -112,3 +112,15 @@ python tests/support/soak_process_pool.py --minutes 480 --servers 5 --report tes
 - docs/superpowers/plans/2026-10-29-multi-airwave-export-implementation.md
 
 Aruba/HPE 공식 배포 프로그램은 아닙니다.
+
+## CI 빌드 재현성 (개발자 전용)
+
+Windows/Linux GitHub Actions의 Python 3.12 패키지 버전을 `ci/constraints-py312.txt`에 기록하고, 각 OS별 실제 설치 버전 목록을 `AirWaveBuildDependencies-Windows` / `AirWaveBuildDependencies-Linux` 아티팩트로 저장합니다. 이 제약 파일은 **CI 전용**이며, 기존 EXE 기능이나 `pyproject.toml`의 사용자 의존성 범위를 변경하지 않습니다.
+
+CI에 적용되는 설치 예시:
+
+```powershell
+python -m pip install -c ci/constraints-py312.txt ".[test,build]"
+```
+
+핵심 및 전이 의존성을 버전 고정하지만 배포 파일의 바이트 단위 재현성을 보증하는 해시 잠금은 아닙니다. GitHub Actions 제공 이미지와 Python 패치 버전이 변경되면 다시 검증해야 합니다. 모의 결함 주입 및 실제 Windows Tk GUI 테스트는 회사 AirWave 서버와 무관하며 실제 장비 검증을 대체하지 않습니다.

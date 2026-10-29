@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: python -m pip install ".[test,build]"
+        run: python -m pip install -c ci/constraints-py312.txt ".[test,build]"
       - name: Ruff static checks
         run: python -m ruff check src tests --select E4,E7,E9,F
       - name: Unit tests
@@ -28,6 +28,8 @@ jobs:
         run: python -m compileall -q src
       - name: Package EXE (Microsoft Edge required on target PC)
         shell: pwsh
+        env:
+          PIP_CONSTRAINT: ci/constraints-py312.txt
         run: ./build/windows_build.ps1
       - name: Packaged EXE startup smoke test
         shell: pwsh
@@ -50,6 +52,21 @@ jobs:
           path: test-results/worker-soak-short.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Record Windows CI dependency provenance
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path test-results -Force | Out-Null
+          python -VV | Out-File -Encoding utf8 test-results/dependencies-windows-py312.txt
+          python -m pip freeze --all | Out-File -Append -Encoding utf8 test-results/dependencies-windows-py312.txt
+      - name: Upload Windows CI build dependencies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirWaveBuildDependencies-Windows
+          path: test-results/dependencies-windows-py312.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload Windows EXE (folder must remain intact)
         uses: actions/upload-artifact@v4
         with:
@@ -66,6 +83,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install ".[test]"
+      - run: python -m pip install -c ci/constraints-py312.txt ".[test]"
       - run: python -m ruff check src tests --select E4,E7,E9,F
       - run: python -m pytest -q
+      - name: Record Linux CI dependency provenance
+        if: always()
+        run: |
+          mkdir -p test-results
+          python -VV > test-results/dependencies-linux-py312.txt
+          python -m pip freeze --all >> test-results/dependencies-linux-py312.txt
+      - name: Upload Linux CI build dependencies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirWaveBuildDependencies-Linux
+          path: test-results/dependencies-linux-py312.txt
+          if-no-files-found: warn
+          retention-days: 14
