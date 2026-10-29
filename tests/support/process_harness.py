@@ -68,6 +68,10 @@ def run_synthetic_batch(
     root: Path, *, servers: int = 5, delay_seconds: float = 0.5,
     fail_always: str | None = None, fail_once: str | None = None,
     retry_delay_seconds: int = 1,
+    crash_server: str | None = None,
+    corrupt_result_server: str | None = None,
+    corrupt_csv_server: str | None = None,
+    write_failure_server: str | None = None,
 ) -> SyntheticRun:
     if not 1 <= servers <= 5:
         raise ValueError("Synthetic server count must be between 1 and 5")
@@ -101,6 +105,10 @@ def run_synthetic_batch(
         "AW_SYNTHETIC_DELAY_SECONDS": str(delay_seconds),
         "AW_SYNTHETIC_FAIL_ALWAYS": fail_always or "",
         "AW_SYNTHETIC_FAIL_ONCE": fail_once or "",
+        "AW_SYNTHETIC_CRASH_SERVER": crash_server or "",
+        "AW_SYNTHETIC_BAD_RESULT_SERVER": corrupt_result_server or "",
+        "AW_SYNTHETIC_BAD_CSV_SERVER": corrupt_csv_server or "",
+        "AW_SYNTHETIC_WRITE_FAILURE_SERVER": write_failure_server or "",
     }
     with patch.dict(os.environ, env), patch.object(process_control, "worker_command", command):
         summary = run_batch(snapshot, launcher=launcher, home=home)
