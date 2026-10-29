@@ -45,7 +45,13 @@ def run_batch(
         with single_instance(home / "state" / "run.lock"):
             summary = BatchSummary(snapshot.run_id, len(snapshot.servers), 0, 0, 0,
                                    skipped, 0, 3, 0.0)
-            write_batch_summary(home, summary, {})
+            skipped_results = {
+                server.id: WorkerResult(
+                    snapshot.run_id, server.id, 0, "SKIPPED", 0, False
+                )
+                for server in snapshot.servers
+            }
+            write_batch_summary(home, summary, skipped_results)
             return summary
     retry_heap: list[tuple[float, int, str, int]] = []
     sequence = 0
