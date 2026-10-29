@@ -44,3 +44,7 @@ def set_enabled(cfg: MultiConfig, sid: str, value: bool) -> None:
 def remove_server(cfg: MultiConfig, sid: str) -> None:
     del cfg.servers[_find(cfg, sid)]
     validate_settings(cfg)
+
+def schedule_check_due(*, now: float, last: float | None, interval: float = 60.0) -> bool:
+    """Windows 작업 스케줄러 호출은 GUI의 2초 갱신과 분리합니다."""
+    return last is None or now - last >= interval

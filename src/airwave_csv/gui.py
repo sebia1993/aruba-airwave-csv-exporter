@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -13,7 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 from .config import SELECTOR_TEMPLATE, app_home
 from .credentials import CredentialError, CredentialStore
 from .events import read_last_batch
-from .gui_model import change_server, remove_server, set_enabled
+from .gui_model import change_server, remove_server, schedule_check_due, set_enabled
 from .migration import migrate_if_needed
 from .multi_config import (
     add_server, registry_path, save_v2, validate_settings,
@@ -43,6 +44,8 @@ class ExporterWindow(tk.Tk):
         self.pass_var = tk.StringVar()
         self.enabled_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="서버를 선택하거나 추가하세요.")
+        self._last_schedule_check: float | None = None
+        self._cached_schedule_status = "확인 전"
         self._build()
         self.refresh()
 
@@ -309,11 +312,16 @@ class ExporterWindow(tk.Tk):
             ))
         if selection and self.table.exists(selection):
             self.table.selection_set(selection)
-        try:
-            schedule=task_status()
-        except ScheduleError:
-            schedule="확인 불가"
-        self.status_var.set(f"등록 서버 {len(self.settings.servers)}/5 · 예약: {schedule}")
+        now = time.monotonic()
+        if schedule_check_due(now=now, last=self._last_schedule_check):
+            self._last_schedule_check = now
+            try:
+                self._cached_schedule_status = task_status()
+            except ScheduleError:
+                self._cached_schedule_status = "확인 불가"
+        self.status_var.set(
+            f"등록 서버 {len(self.settings.servers)}/5 · 예약: {self._cached_schedule_status}"
+        )
         self.after(2000,self.refresh)
 
 
