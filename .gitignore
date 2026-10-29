@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+*.spec
+*.log
+*.csv
+*.part
+config.json
+selectors.json
+*.zip
+.idea/
+.vscode/

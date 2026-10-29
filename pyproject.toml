@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aruba-airwave-csv-exporter"
+version = "0.1.0"
+description = "Read-only scheduled Aruba AirWave Devices CSV exporter for Windows 11"
+requires-python = ">=3.11"
+dependencies = ["playwright>=1.55,<2", "keyring>=25,<27"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "ruff>=0.13,<1"]
+build = ["pyinstaller>=6.14,<7"]
+
+[project.scripts]
+airwave-csv-exporter = "airwave_csv.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
