@@ -142,3 +142,44 @@ def test_refresh_keeps_current_selection_and_unsaved_input(tmp_path, monkeypatch
     assert w.table.selection_set_calls == []
     assert w.table.delete_calls == []
     assert w.table.insert_calls == ["airwave-01"]
+
+
+def test_vault_failure_restores_original_config_without_allocating_rollback_bytes(
+    tmp_path, monkeypatch,
+):
+    """파일 저장 후 보안 저장소가 실패해도 원본 설정을 보존합니다."""
+    from pathlib import Path
+
+    from airwave_csv.credentials import CredentialError
+    from airwave_csv.multi_config import registry_path, save_v2
+
+    w, _ = make_window(tmp_path, monkeypatch)
+    config_path = registry_path(tmp_path)
+    save_v2(w.settings, config_path)
+    original = config_path.read_bytes()
+    w.table.selected_id = "airwave-01"
+    w.name_var.set("Changed before credential failure")
+    w.pass_var.set("new-demo-secret")
+
+    def fail_vault(*args):
+        raise CredentialError("vault unavailable")
+
+    original_write = Path.write_bytes
+
+    def fail_rollback_allocation(self, data):
+        if ".rollback." in self.name:
+            raise OSError("no storage space for backup rewrite")
+        return original_write(self, data)
+
+    monkeypatch.setattr(gui.CredentialStore, "set_for_server", fail_vault)
+    monkeypatch.setattr(Path, "write_bytes", fail_rollback_allocation)
+    w.edit()
+    assert w.settings.servers[0].display_name == "AirWave A"
+    assert config_path.read_bytes() == original
+
+
+def test_malformed_server_result_does_not_crash_refresh(tmp_path, monkeypatch):
+    w, _ = make_window(tmp_path, monkeypatch)
+    monkeypatch.setattr(gui, "read_last_batch", lambda _: {"servers": "damaged"})
+    w.refresh()
+    assert w.table.exists("airwave-01")
