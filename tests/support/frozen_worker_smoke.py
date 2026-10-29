@@ -93,7 +93,7 @@ def main():
         root = Path(temp)
         for count in (3, 5):
             print(verify(args.exe.resolve(), count, root / str(count)))
-    print("Windows EXE 3·5개 실제 프로세스 fail-closed 검증 통과")
+    print("Windows EXE 3/5 real worker processes: fail-closed verification passed")
 
 
 if __name__ == "__main__":
