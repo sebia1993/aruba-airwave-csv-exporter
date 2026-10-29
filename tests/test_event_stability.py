@@ -58,3 +58,26 @@ def test_scheduler_status_is_not_queried_on_gui_thread(tmp_path, monkeypatch):
     assert called.wait(3), "기존 주기의 예약 상태 조회는 유지해야 합니다."
     assert thread_ids == [thread_ids[0]]
     assert thread_ids[0] != main_thread, "Windows PowerShell을 GUI 메인 스레드에서 호출하면 안 됩니다."
+
+
+def test_unexpected_scheduler_thread_error_does_not_disable_future_checks(
+    tmp_path, monkeypatch,
+):
+    import time
+
+    w, _ = make_window(tmp_path, monkeypatch)
+    entered = threading.Event()
+
+    def fail_unexpectedly():
+        entered.set()
+        raise RuntimeError("unexpected PowerShell runtime failure")
+
+    monkeypatch.setattr(gui, "task_status", fail_unexpectedly)
+    w.refresh()
+    assert entered.wait(2)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and w._schedule_status_results.empty():
+        time.sleep(0.01)
+    w.refresh()
+    assert w._cached_schedule_status == "확인 불가"
+    assert w._schedule_status_inflight is False
