@@ -84,3 +84,37 @@ def test_zero_active_reports_no_target(tmp_path):
     result=run_batch(BatchSnapshot("run-1",cfg,tuple(),{},""),launcher=Launcher(),
                      clock=Clock(),home=tmp_path)
     assert result.exit_code==3
+
+
+def test_final_summary_and_active_marker_are_written_under_batch_lock(tmp_path, monkeypatch):
+    """뒤따르는 예약 실행이 마지막 결과를 덮어쓰는 경쟁 상태를 막습니다."""
+    import contextlib
+
+    from airwave_csv import orchestrator
+
+    holding = {"value": False}
+    original_summary = orchestrator.write_batch_summary
+    original_clear = orchestrator.clear_batch_active
+
+    @contextlib.contextmanager
+    def tracked_lock(_path):
+        assert not holding["value"]
+        holding["value"] = True
+        try:
+            yield
+        finally:
+            holding["value"] = False
+
+    def checked_summary(*args, **kwargs):
+        assert holding["value"], "배치 잠금이 해제되기 전에 요약을 저장해야 합니다."
+        return original_summary(*args, **kwargs)
+
+    def checked_clear(*args, **kwargs):
+        assert holding["value"], "활성 마커 삭제까지 배치 잠금을 유지해야 합니다."
+        return original_clear(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "single_instance", tracked_lock)
+    monkeypatch.setattr(orchestrator, "write_batch_summary", checked_summary)
+    monkeypatch.setattr(orchestrator, "clear_batch_active", checked_clear)
+    result = run_batch(snapshot(tmp_path, 1), launcher=Launcher(), clock=Clock(), home=tmp_path)
+    assert result.success == 1
