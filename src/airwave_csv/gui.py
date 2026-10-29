@@ -339,7 +339,7 @@ class ExporterWindow(tk.Tk):
             try:
                 run_id=json.loads(active.read_text(encoding="utf-8"))["run_id"]
                 p=json.loads(progress_file.read_text(encoding="utf-8"))
-                if p.get("run_id")==run_id:
+                if isinstance(p, dict) and p.get("run_id")==run_id:
                     candidate_progress = p.get("servers", {})
                     if isinstance(candidate_progress, dict):
                         progress = candidate_progress

@@ -108,8 +108,10 @@ def reconcile_interrupted_batch(home: Path) -> None:
         progress = {}
         if progress_path.exists():
             current = json.loads(progress_path.read_text(encoding="utf-8"))
-            if current.get("run_id") == run_id:
-                progress = current.get("servers", {})
+            if isinstance(current, dict) and current.get("run_id") == run_id:
+                candidate_progress = current.get("servers", {})
+                if isinstance(candidate_progress, dict):
+                    progress = candidate_progress
         if not progress:
             snapshot = home / "runs" / run_id / "snapshot.json"
             if snapshot.exists():
