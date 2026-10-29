@@ -350,7 +350,7 @@ class ExporterWindow(tk.Tk):
         self.status_var.set(
             f"등록 서버 {len(self.settings.servers)}/5 · 예약: {self._cached_schedule_status}"
         )
-        if getattr(self, "_refresh_timer_id", None) is None:
+        if self.__dict__.get("_refresh_timer_id") is None:
             self._refresh_timer_id = self.after(2000, self._timed_refresh)
 
     def _timed_refresh(self):
