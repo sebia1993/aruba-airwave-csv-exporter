@@ -5,6 +5,9 @@ from airwave_csv.portal import AirWavePortal, PortalError
 
 
 class Select:
+    def count(self):
+        return 1
+
     def __init__(self, selected):
         self.selected = selected
 

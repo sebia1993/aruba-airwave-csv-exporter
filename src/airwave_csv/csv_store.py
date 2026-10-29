@@ -40,7 +40,7 @@ def analyze(path: Path) -> CsvInfo:
             or prefix.startswith((b"{", b"["))):
         raise CsvValidationError("CSV 대신 HTML 또는 JSON 오류 페이지가 다운로드됐습니다.")
     text = None
-    for encoding in ("utf-8-sig", "utf-16", "cp949"):
+    for encoding in (("utf-16",) if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "cp949")):
         try:
             text = data.decode(encoding)
             break

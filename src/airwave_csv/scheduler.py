@@ -7,8 +7,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .config import TASK_NAME
-
 
 class ScheduleError(Exception):
     pass
