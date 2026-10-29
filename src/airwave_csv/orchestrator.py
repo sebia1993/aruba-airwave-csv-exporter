@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import app_home
+from .events import (clear_batch_active, mark_batch_active, record_server_event,
+                     reconcile_interrupted_batch, write_batch_summary)
 from .lock import single_instance
 from .process_control import WorkerLauncher
 from .run_snapshot import BatchSnapshot, WorkerResult, write_snapshot
@@ -38,17 +40,22 @@ def run_batch(
     pending = deque(s.id for s in snapshot.servers if s.enabled)
     skipped = len(snapshot.servers) - len(pending)
     if not pending:
-        return BatchSummary(snapshot.run_id, len(snapshot.servers), 0, 0, 0,
-                            skipped, 0, 3, 0.0)
+        summary = BatchSummary(snapshot.run_id, len(snapshot.servers), 0, 0, 0,
+                               skipped, 0, 3, 0.0)
+        write_batch_summary(home, summary, {})
+        return summary
     retry_heap: list[tuple[float, int, str, int]] = []
     sequence = 0
     active: dict[str, tuple[object, int]] = {}
     first_started: dict[str, float] = {}
     terminal: dict[str, str] = {}
+    results: dict[str, WorkerResult] = {}
     launcher = launcher or WorkerLauncher(snapshot.run_id)
 
     with single_instance(home / "state" / "run.lock"):
+        reconcile_interrupted_batch(home)
         snapshot_path = write_snapshot(home, snapshot)
+        mark_batch_active(home, snapshot.run_id)
         try:
             while pending or retry_heap or active:
                 now = clock.monotonic()
@@ -102,6 +109,12 @@ def run_batch(
                         continue
                     del active[sid]
                     progress = True
+                    results[sid] = result
+                    record_server_event(
+                        home, run_id=snapshot.run_id, server_id=sid,
+                        stage="attempt", status=result.status, code=result.exit_code,
+                        attempt=attempt, rows=result.rows, filename=result.filename,
+                    )
                     if (result.status == "FAILED" and result.retryable and
                             attempt < cfg.max_attempts and
                             now - first_started[sid] + cfg.retry_delay_seconds
@@ -130,7 +143,17 @@ def run_batch(
     interrupted = sum(v == "INTERRUPTED" for v in terminal.values())
     count = good + warn + failed + interrupted
     code = 0 if good == count else (1 if not good and not warn else 2)
-    return BatchSummary(
+    summary = BatchSummary(
         snapshot.run_id, len(snapshot.servers), good, warn, failed,
         skipped, interrupted, code, round(clock.monotonic() - start, 2),
     )
+    for sid, status in terminal.items():
+        if sid not in results or results[sid].status != status:
+            results[sid] = WorkerResult(
+                snapshot.run_id, sid, 0, status, 98, False,
+            )
+    for sid in (s.id for s in snapshot.servers if not s.enabled):
+        results[sid] = WorkerResult(snapshot.run_id, sid, 0, "SKIPPED", 0, False)
+    write_batch_summary(home, summary, results)
+    clear_batch_active(home)
+    return summary
