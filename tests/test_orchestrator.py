@@ -118,3 +118,21 @@ def test_final_summary_and_active_marker_are_written_under_batch_lock(tmp_path, 
     monkeypatch.setattr(orchestrator, "clear_batch_active", checked_clear)
     result = run_batch(snapshot(tmp_path, 1), launcher=Launcher(), clock=Clock(), home=tmp_path)
     assert result.success == 1
+
+
+def test_all_disabled_servers_are_reported_skipped(tmp_path):
+    """모든 서버가 비활성인 배치도 서버별 제외 사유를 결과에 보존합니다."""
+    from dataclasses import replace
+
+    from airwave_csv.events import read_last_batch
+
+    initial = snapshot(tmp_path, 2)
+    servers = tuple(replace(s, enabled=False) for s in initial.servers)
+    batch = BatchSnapshot(initial.run_id, initial.settings, servers, {}, initial.created_at)
+    outcome = run_batch(batch, launcher=Launcher(), clock=Clock(), home=tmp_path)
+
+    assert outcome.exit_code == 3
+    assert outcome.skipped == 2
+    status = read_last_batch(tmp_path)
+    assert status["servers"]["airwave-01"]["status"] == "SKIPPED"
+    assert status["servers"]["airwave-02"]["status"] == "SKIPPED"
