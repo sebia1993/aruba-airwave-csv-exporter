@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-import pytest
-
 from airwave_csv import gui
 from airwave_csv.multi_config import MultiConfig, add_server
 
