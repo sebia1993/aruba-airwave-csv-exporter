@@ -28,6 +28,8 @@ class SyntheticRun:
     max_concurrent: int
     completed_count: int
     active_marker_removed: bool
+    worker_outcomes: dict[str, dict]
+    worker_errors: dict[str, str]
 
 
 class TrackedLauncher(process_control.WorkerLauncher):
@@ -107,10 +109,25 @@ def run_synthetic_batch(
         json.loads(path.read_text(encoding="utf-8"))
         for path in run_dir.glob("result-*.timeline.json")
     ]
+    batch_summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    outcomes = {
+        sid: {
+            "status": result.get("status"),
+            "code": result.get("exit_code"),
+            "attempt": result.get("attempt"),
+        }
+        for sid, result in batch_summary.get("servers", {}).items()
+    }
+    errors = {
+        item["server_id"]: item["error_type"]
+        for item in timeline if item.get("error_type")
+    }
     return SyntheticRun(
         summary=summary, export_root=export_root, run_root=home / "runs",
         started_order=launcher.started_order,
         max_concurrent=max(launcher.peak_live_handles, _interval_peak(timeline)),
         completed_count=len(timeline),
         active_marker_removed=not (home / "state" / "active_batch.json").exists(),
+        worker_outcomes=outcomes,
+        worker_errors=errors,
     )

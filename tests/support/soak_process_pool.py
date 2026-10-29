@@ -99,6 +99,8 @@ def run_soak(
                     "max_concurrent": result.max_concurrent,
                     "marker_removed": result.active_marker_removed,
                     "started_count": len(result.started_order),
+                    "worker_outcomes": result.worker_outcomes,
+                    "worker_errors": result.worker_errors,
                 }
                 if (result.summary.success != servers or result.summary.failed != 0
                         or result.summary.exit_code != 0
