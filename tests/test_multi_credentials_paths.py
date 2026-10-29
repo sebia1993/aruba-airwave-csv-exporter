@@ -1,4 +1,3 @@
-from pathlib import Path
 import pytest
 
 from airwave_csv.credentials import CredentialStore
