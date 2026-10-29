@@ -82,7 +82,11 @@ def write_batch_summary(home: Path, summary, server_results: dict) -> None:
 
 def read_last_batch(home: Path) -> dict:
     path = home / "state" / "last_batch.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return {}  # 저장 실패/파일 손상은 GUI 종료 사유가 아닙니다.
+    return data if isinstance(data, dict) else {}
 
 
 def mark_batch_active(home: Path, run_id: str) -> None:
@@ -104,8 +108,10 @@ def reconcile_interrupted_batch(home: Path) -> None:
         progress = {}
         if progress_path.exists():
             current = json.loads(progress_path.read_text(encoding="utf-8"))
-            if current.get("run_id") == run_id:
-                progress = current.get("servers", {})
+            if isinstance(current, dict) and current.get("run_id") == run_id:
+                candidate_progress = current.get("servers", {})
+                if isinstance(candidate_progress, dict):
+                    progress = candidate_progress
         if not progress:
             snapshot = home / "runs" / run_id / "snapshot.json"
             if snapshot.exists():
@@ -120,5 +126,19 @@ def reconcile_interrupted_batch(home: Path) -> None:
         _write_json_atomic(home / "state" / "last_interrupted.json", summary)
         _write_json_atomic(home / "state" / "last_batch.json", summary)
     except (OSError, ValueError, TypeError, KeyError):
-        pass  # 실패한 기록을 성공으로 처리하지는 않습니다.
+        return  # 복구 저장 실패 시 마커를 보존해 다음 실행에서 재시도합니다.
     clear_batch_active(home)
+
+
+def reconcile_if_idle(home: Path) -> bool:
+    """작업이 실제 실행 중이면 건드리지 않고, 유휴일 때만 이전 중단을 복구합니다."""
+    from .lock import AlreadyRunning, single_instance
+
+    if not (home / "state" / "active_batch.json").exists():
+        return False
+    try:
+        with single_instance(home / "state" / "run.lock"):
+            reconcile_interrupted_batch(home)
+            return not (home / "state" / "active_batch.json").exists()
+    except (AlreadyRunning, OSError):
+        return False
