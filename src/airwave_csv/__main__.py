@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 import sys
 from uuid import uuid4
@@ -23,7 +24,7 @@ def run_all(only: str | None = None) -> int:
         settings = migrate_if_needed(home)
         validate_settings(settings)
         if only:
-            servers = tuple(s for s in settings.servers if s.id == only)
+            servers = tuple(replace(s, enabled=True) for s in settings.servers if s.id == only)
             if len(servers) != 1:
                 return 3
         else:
