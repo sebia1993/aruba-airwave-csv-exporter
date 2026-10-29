@@ -25,8 +25,13 @@ class AirWavePortal:
         self.config = config
         self.selectors = selectors
 
-    def _one(self, page, selector: str, code: int, label: str):
+    def _one(self, page, selector: str, code: int, label: str, *, wait: bool = True):
         locator = page.locator(selector)
+        if wait and hasattr(locator, "first"):
+            try:
+                locator.first.wait_for(state="attached", timeout=10000)
+            except Exception as exc:
+                raise PortalError(code, label + " 화면 요소를 기다리다 시간 초과됐습니다.") from exc
         if locator.count() != 1:
             raise PortalError(code, label + " 화면 요소가 유일하지 않거나 없습니다.")
         return locator
@@ -133,7 +138,7 @@ class AirWavePortal:
 
     def _total(self, page) -> int:
         root = self._one(page, self.selectors["table_root_css"], 47, "Devices List")
-        element = self._one(root, self.selectors["total_count_css"], 47, "장비 총건수")
+        element = self._one(root, self.selectors["total_count_css"], 47, "장비 총건수", wait=False)
         match = re.search(self.selectors["total_count_pattern"], element.inner_text())
         if not match:
             raise PortalError(47, "장비 목록 총건수 표시를 해석할 수 없습니다.")
@@ -186,6 +191,9 @@ class AirWavePortal:
                 self._one(page, css, 32, "List 메뉴").click()
             else:
                 page.get_by_role("link", name="List", exact=True).click(timeout=10000)
+            page.locator(self.selectors["table_root_css"]).wait_for(
+                state="visible", timeout=30000
+            )
         except PortalError:
             raise
         except Exception as exc:
